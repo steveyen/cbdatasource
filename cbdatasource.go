@@ -21,11 +21,10 @@ type Receiver interface {
 	OnError(error)
 	GetMetaData() ([]byte, error)
 	SetMetaData([]byte) error
-	OnDocUpdate()
-	OnDocDelete()
-	GetSeqNum()
-	Snapshot()
-	Rollback()
+	OnDocUpdate() error
+	OnDocDelete() error
+	Snapshot() error
+	Rollback() error
 }
 
 type BucketDataSource interface {
@@ -56,6 +55,8 @@ var DefaultBucketDataSourceOptions =  &BucketDataSourceOptions{
 
 type BucketDataSourceStats struct {
 }
+
+// --------------------------------------------------------
 
 type bucketDataSource struct {
 	serverURLs []string
