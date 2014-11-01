@@ -17,27 +17,8 @@ import (
 	"time"
 )
 
-type BucketDataSource interface {
-	Start() error
-	Close() error
-}
-
-type bucketDataSource struct {
-	serverURLs []string
-	bucketName string
-	bucketUUID string
-	vbucketIds []uint16
-	authFunc   AuthFunc
-	receiver   Receiver
-	options    map[string]float32
-
-	m         sync.Mutex
-	isRunning bool
-}
-
-type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
-
 type Receiver interface {
+	OnError(error)
 	GetMetaData() ([]byte, error)
 	SetMetaData([]byte) error
 	OnDocUpdate()
@@ -47,10 +28,54 @@ type Receiver interface {
 	Rollback()
 }
 
+type BucketDataSource interface {
+	Start() error
+	Stats() BucketDataSourceStats
+	Close() error
+}
+
+type BucketDataSourceOptions struct {
+	ClusterManagerBackoffFactor float32
+	ClusterManagerSleepInitMS int
+	ClusterManagerSleepMaxMS int
+
+	DataManagerBackoffFactor float32
+	DataManagerSleepInitMS int
+	DataManagerSleepMaxMS int
+}
+
+var DefaultBucketDataSourceOptions =  &BucketDataSourceOptions{
+	ClusterManagerBackoffFactor: 1.5,
+	ClusterManagerSleepInitMS: 100,
+	ClusterManagerSleepMaxMS: 1000,
+
+	DataManagerBackoffFactor: 1.5,
+	DataManagerSleepInitMS: 100,
+	DataManagerSleepMaxMS: 1000,
+}
+
+type BucketDataSourceStats struct {
+}
+
+type bucketDataSource struct {
+	serverURLs []string
+	bucketName string
+	bucketUUID string
+	vbucketIds []uint16
+	authFunc   AuthFunc
+	receiver   Receiver
+	options    *BucketDataSourceOptions
+
+	m         sync.Mutex
+	isRunning bool
+}
+
+type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
+
 func NewBucketDataSource(serverURLs []string,
 	bucketName, bucketUUID string,
 	vbucketIds []uint16, authFunc AuthFunc,
-	receiver Receiver, options map[string]float32) (BucketDataSource, error) {
+	receiver Receiver, options *BucketDataSourceOptions) (BucketDataSource, error) {
 	if len(serverURLs) < 1 {
 		return nil, fmt.Errorf("missing at least 1 serverURL")
 	}
@@ -61,7 +86,7 @@ func NewBucketDataSource(serverURLs []string,
 		return nil, fmt.Errorf("missing receiver")
 	}
 	if options == nil {
-		options = map[string]float32{}
+		options = DefaultBucketDataSourceOptions
 	}
 	return &bucketDataSource{
 		serverURLs: serverURLs,
@@ -74,10 +99,6 @@ func NewBucketDataSource(serverURLs []string,
 	}, nil
 }
 
-const LOOP_SLEEP_MAX_MS = 10000
-const LOOP_SLEEP_INIT_MS = 100
-const LOOP_BACKOFF_FACTOR = 1.5
-
 func (d *bucketDataSource) Start() error {
 	d.m.Lock()
 	defer d.m.Unlock()
@@ -87,17 +108,17 @@ func (d *bucketDataSource) Start() error {
 	}
 	d.isRunning = true
 
-	sleepMaxMS, exists := d.options["sleepMaxMS"]
-	if !exists {
-		sleepMaxMS = LOOP_SLEEP_MAX_MS
+	backoffFactor := d.options.ClusterManagerBackoffFactor
+	if backoffFactor <= 0.0 {
+		backoffFactor = DefaultBucketDataSourceOptions.ClusterManagerBackoffFactor
 	}
-	sleepInitMS, exists := d.options["sleepInitMS"]
-	if !exists {
-		sleepInitMS = LOOP_SLEEP_INIT_MS
+	sleepInitMS := d.options.ClusterManagerSleepInitMS
+	if sleepInitMS <= 0 {
+		sleepInitMS = DefaultBucketDataSourceOptions.ClusterManagerSleepInitMS
 	}
-	backoffFactor, exists := d.options["backoffFactor"]
-	if !exists {
-		backoffFactor = LOOP_BACKOFF_FACTOR
+	sleepMaxMS := d.options.ClusterManagerSleepMaxMS
+	if sleepMaxMS <= 0 {
+		sleepMaxMS = DefaultBucketDataSourceOptions.ClusterManagerSleepMaxMS
 	}
 
 	go ExponentialBackoffLoop("bucketDataSource.run",
@@ -109,6 +130,10 @@ func (d *bucketDataSource) Start() error {
 
 func (d *bucketDataSource) run() int {
 	return -1
+}
+
+func (d *bucketDataSource) Stats() BucketDataSourceStats {
+	return BucketDataSourceStats{}
 }
 
 func (d *bucketDataSource) Close() error {
