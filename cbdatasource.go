@@ -13,12 +13,15 @@ package cbdatasource
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
+
+	"github.com/couchbaselabs/go-couchbase"
 )
 
 type Receiver interface {
-	OnError(error)
+	OnError(error) error
 	GetMetaData() ([]byte, error)
 	SetMetaData([]byte) error
 	OnDocUpdate() error
@@ -35,22 +38,22 @@ type BucketDataSource interface {
 
 type BucketDataSourceOptions struct {
 	ClusterManagerBackoffFactor float32
-	ClusterManagerSleepInitMS int
-	ClusterManagerSleepMaxMS int
+	ClusterManagerSleepInitMS   int
+	ClusterManagerSleepMaxMS    int
 
 	DataManagerBackoffFactor float32
-	DataManagerSleepInitMS int
-	DataManagerSleepMaxMS int
+	DataManagerSleepInitMS   int
+	DataManagerSleepMaxMS    int
 }
 
-var DefaultBucketDataSourceOptions =  &BucketDataSourceOptions{
+var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 	ClusterManagerBackoffFactor: 1.5,
-	ClusterManagerSleepInitMS: 100,
-	ClusterManagerSleepMaxMS: 1000,
+	ClusterManagerSleepInitMS:   100,
+	ClusterManagerSleepMaxMS:    1000,
 
 	DataManagerBackoffFactor: 1.5,
-	DataManagerSleepInitMS: 100,
-	DataManagerSleepMaxMS: 1000,
+	DataManagerSleepInitMS:   100,
+	DataManagerSleepMaxMS:    1000,
 }
 
 type BucketDataSourceStats struct {
@@ -60,6 +63,7 @@ type BucketDataSourceStats struct {
 
 type bucketDataSource struct {
 	serverURLs []string
+	poolName   string
 	bucketName string
 	bucketUUID string
 	vbucketIds []uint16
@@ -69,16 +73,23 @@ type bucketDataSource struct {
 
 	m         sync.Mutex
 	isRunning bool
+	vbm       *couchbase.VBucketServerMap
+
+	refreshClusterCh chan string
+	refreshStreamsCh chan string
 }
 
 type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
 
 func NewBucketDataSource(serverURLs []string,
-	bucketName, bucketUUID string,
+	poolName, bucketName, bucketUUID string,
 	vbucketIds []uint16, authFunc AuthFunc,
 	receiver Receiver, options *BucketDataSourceOptions) (BucketDataSource, error) {
 	if len(serverURLs) < 1 {
 		return nil, fmt.Errorf("missing at least 1 serverURL")
+	}
+	if poolName == "" {
+		return nil, fmt.Errorf("missing poolName")
 	}
 	if bucketName == "" {
 		return nil, fmt.Errorf("missing bucketName")
@@ -91,12 +102,17 @@ func NewBucketDataSource(serverURLs []string,
 	}
 	return &bucketDataSource{
 		serverURLs: serverURLs,
+		poolName:   poolName,
 		bucketName: bucketName,
 		bucketUUID: bucketUUID,
 		vbucketIds: vbucketIds,
 		authFunc:   authFunc,
 		receiver:   receiver,
 		options:    options,
+		isRunning:  false,
+
+		refreshClusterCh: make(chan string, 1),
+		refreshStreamsCh: make(chan string, 1),
 	}, nil
 }
 
@@ -122,15 +138,80 @@ func (d *bucketDataSource) Start() error {
 		sleepMaxMS = DefaultBucketDataSourceOptions.ClusterManagerSleepMaxMS
 	}
 
-	go ExponentialBackoffLoop("bucketDataSource.run",
-		func() int { return d.run() },
+	go ExponentialBackoffLoop("bucketDataSource.clusterManagerOnce",
+		func() int { return d.refreshCluster() },
 		int(sleepInitMS), backoffFactor, int(sleepMaxMS))
+
+	go func() {
+		for _ = range d.refreshStreamsCh {
+			// Something changed.
+		}
+	}()
 
 	return nil
 }
 
-func (d *bucketDataSource) run() int {
-	return -1
+func (d *bucketDataSource) refreshCluster() int {
+serverURLs:
+	for _, serverURL := range d.serverURLs {
+		for {
+			// TODO: Use AUTH'ed approach.
+			bucket, err := couchbase.GetBucket(serverURL, d.poolName, d.bucketName)
+			if err != nil {
+				continue serverURLs // Try another serverURL.
+			}
+			if bucket == nil {
+				err := d.receiver.OnError(fmt.Errorf("unknown bucket,"+
+					" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+					serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
+				if err != nil {
+					return -1
+				}
+				bucket.Close()
+				continue serverURLs
+			}
+			if d.bucketUUID != "" && d.bucketUUID != bucket.UUID {
+				err := d.receiver.OnError(fmt.Errorf("mismatched bucket uuid,"+
+					" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+					serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
+				if err != nil {
+					return -1
+				}
+				bucket.Close()
+				continue serverURLs
+			}
+			vbm := bucket.VBServerMap()
+			if vbm == nil {
+				err := d.receiver.OnError(fmt.Errorf("no vbm,"+
+					" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+					serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
+				if err != nil {
+					return -1
+				}
+				bucket.Close()
+				continue serverURLs
+			}
+			bucket.Close()
+
+			d.m.Lock()
+			vbmSame := reflect.DeepEqual(vbm, d.vbm)
+			d.vbm = vbm
+			d.m.Unlock()
+
+			if !vbmSame {
+				d.refreshStreamsCh <- "new-vbm"
+			}
+
+			_, alive := <-d.refreshClusterCh
+			if !alive {
+				return -1
+			}
+
+			// We reach here to try to refresh our vbm with the same serverURL.
+		}
+	}
+
+	return 0 // Ran through all the servers, so no progress.
 }
 
 func (d *bucketDataSource) Stats() BucketDataSourceStats {
