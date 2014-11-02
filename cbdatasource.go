@@ -210,6 +210,8 @@ serverURLs:
 }
 
 func (d *bucketDataSource) refreshStreams() {
+	workers := make(map[string]chan []uint16)
+
 	for _ = range d.refreshStreamsCh {
 		d.m.Lock()
 		vbm := d.vbm
@@ -244,6 +246,32 @@ func (d *bucketDataSource) refreshStreams() {
 			}
 			v = append(v, vbucketId)
 			vbucketIdsByServer[masterServer] = v
+		}
+
+		// Start any missing workers and update workers with their
+		// latest vbucketIds.
+		for server, serverVBucketIds := range vbucketIdsByServer {
+			workerCh, exists := workers[server]
+			if !exists || workerCh == nil {
+				workerCh = make(chan []uint16)
+				workers[server] = workerCh
+				go d.workerStart(server, workerCh)
+			}
+
+			workerCh <- serverVBucketIds
+		}
+	}
+
+	for _, workerCh := range workers {
+		close(workerCh)
+	}
+}
+
+func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uint16) {
+	curVBucketIds := []uint16{}
+	for newVBucketIds := range newVBucketIdsCh {
+		if reflect.DeepEqual(curVBucketIds, newVBucketIds) {
+			continue
 		}
 	}
 }
