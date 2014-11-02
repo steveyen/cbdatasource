@@ -150,61 +150,59 @@ func (d *bucketDataSource) Start() error {
 func (d *bucketDataSource) refreshCluster() int {
 serverURLs:
 	for _, serverURL := range d.serverURLs {
-		for {
-			// TODO: Use AUTH'ed approach.
-			bucket, err := couchbase.GetBucket(serverURL, d.poolName, d.bucketName)
+		// TODO: Use AUTH'ed approach.
+		bucket, err := couchbase.GetBucket(serverURL, d.poolName, d.bucketName)
+		if err != nil {
+			continue serverURLs // Try another serverURL.
+		}
+		if bucket == nil {
+			err := d.receiver.OnError(fmt.Errorf("unknown bucket,"+
+				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
 			if err != nil {
-				continue serverURLs // Try another serverURL.
-			}
-			if bucket == nil {
-				err := d.receiver.OnError(fmt.Errorf("unknown bucket,"+
-					" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-					serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
-				if err != nil {
-					return -1
-				}
-				bucket.Close()
-				continue serverURLs
-			}
-			if d.bucketUUID != "" && d.bucketUUID != bucket.UUID {
-				err := d.receiver.OnError(fmt.Errorf("mismatched bucket uuid,"+
-					" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-					serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
-				if err != nil {
-					return -1
-				}
-				bucket.Close()
-				continue serverURLs
-			}
-			vbm := bucket.VBServerMap()
-			if vbm == nil {
-				err := d.receiver.OnError(fmt.Errorf("no vbm,"+
-					" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-					serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
-				if err != nil {
-					return -1
-				}
-				bucket.Close()
-				continue serverURLs
-			}
-			bucket.Close()
-
-			d.m.Lock()
-			vbmSame := reflect.DeepEqual(vbm, d.vbm)
-			d.vbm = vbm
-			d.m.Unlock()
-
-			if !vbmSame {
-				d.refreshStreamsCh <- "new-vbm"
-			}
-
-			_, alive := <-d.refreshClusterCh
-			if !alive {
 				return -1
 			}
-
-			// We reach here to try to refresh our vbm with the same serverURL.
+			bucket.Close()
+			continue serverURLs
 		}
+		if d.bucketUUID != "" && d.bucketUUID != bucket.UUID {
+			err := d.receiver.OnError(fmt.Errorf("mismatched bucket uuid,"+
+				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
+			if err != nil {
+				return -1
+			}
+			bucket.Close()
+			continue serverURLs
+		}
+		vbm := bucket.VBServerMap()
+		if vbm == nil {
+			err := d.receiver.OnError(fmt.Errorf("no vbm,"+
+				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
+			if err != nil {
+				return -1
+			}
+			bucket.Close()
+			continue serverURLs
+		}
+		bucket.Close()
+
+		d.m.Lock()
+		vbmSame := reflect.DeepEqual(vbm, d.vbm)
+		d.vbm = vbm
+		d.m.Unlock()
+
+		if !vbmSame {
+			d.refreshStreamsCh <- "new-vbm"
+		}
+
+		_, alive := <-d.refreshClusterCh
+		if !alive {
+			return -1
+		}
+
+		return 1
 	}
 
 	return 0 // Ran through all the servers, so no progress.
