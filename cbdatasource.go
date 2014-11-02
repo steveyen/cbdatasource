@@ -71,12 +71,12 @@ type bucketDataSource struct {
 	receiver   Receiver
 	options    *BucketDataSourceOptions
 
+	refreshClusterCh chan string
+	refreshStreamsCh chan string
+
 	m         sync.Mutex
 	isRunning bool
 	vbm       *couchbase.VBucketServerMap
-
-	refreshClusterCh chan string
-	refreshStreamsCh chan string
 }
 
 type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
@@ -109,10 +109,11 @@ func NewBucketDataSource(serverURLs []string,
 		authFunc:   authFunc,
 		receiver:   receiver,
 		options:    options,
-		isRunning:  false,
 
 		refreshClusterCh: make(chan string, 1),
 		refreshStreamsCh: make(chan string, 1),
+
+		isRunning: false,
 	}, nil
 }
 
@@ -210,7 +211,40 @@ serverURLs:
 
 func (d *bucketDataSource) refreshStreams() {
 	for _ = range d.refreshStreamsCh {
-		// Something changed.
+		d.m.Lock()
+		vbm := d.vbm
+		d.m.Unlock()
+
+		// Group the vbucketIds by server.
+		vbucketIdsByServer := make(map[string][]uint16)
+
+		for _, vbucketId := range d.vbucketIds {
+			if int(vbucketId) >= len(vbm.VBucketMap) {
+				// TODO: Report bad vbucketId.
+				continue
+			}
+			serverIdxs := vbm.VBucketMap[vbucketId]
+			if serverIdxs == nil || len(serverIdxs) < 1 {
+				// TODO: Report no serverIdxs for vbucketId.
+				continue
+			}
+			masterIdx := serverIdxs[0]
+			if int(masterIdx) >= len(vbm.ServerList) {
+				// TODO: Report bad masterIdx.
+				continue
+			}
+			masterServer := vbm.ServerList[masterIdx]
+			if masterServer == "" {
+				// TODO: Report bad masterServer.
+				continue
+			}
+			v, exists := vbucketIdsByServer[masterServer]
+			if !exists || v == nil {
+				v = []uint16{}
+			}
+			v = append(v, vbucketId)
+			vbucketIdsByServer[masterServer] = v
+		}
 	}
 }
 
