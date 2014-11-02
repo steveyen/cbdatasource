@@ -260,6 +260,14 @@ func (d *bucketDataSource) refreshStreams() {
 
 			workerCh <- serverVBucketIds
 		}
+
+		// Close any extraneous works.
+		for server, workerCh := range workers {
+			if _, exists := vbucketIdsByServer[server]; !exists {
+				delete(workers, server)
+				close(workerCh)
+			}
+		}
 	}
 
 	for _, workerCh := range workers {
