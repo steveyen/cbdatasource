@@ -142,11 +142,7 @@ func (d *bucketDataSource) Start() error {
 		func() int { return d.refreshCluster() },
 		int(sleepInitMS), backoffFactor, int(sleepMaxMS))
 
-	go func() {
-		for _ = range d.refreshStreamsCh {
-			// Something changed.
-		}
-	}()
+	go d.refreshStreams()
 
 	return nil
 }
@@ -212,6 +208,12 @@ serverURLs:
 	}
 
 	return 0 // Ran through all the servers, so no progress.
+}
+
+func (d *bucketDataSource) refreshStreams() {
+	for _ = range d.refreshStreamsCh {
+		// Something changed.
+	}
 }
 
 func (d *bucketDataSource) Stats() BucketDataSourceStats {
