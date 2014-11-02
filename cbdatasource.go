@@ -279,8 +279,9 @@ func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uin
 	curVBucketIds := []uint16{}
 	for newVBucketIds := range newVBucketIdsCh {
 		if reflect.DeepEqual(curVBucketIds, newVBucketIds) {
-			continue
+			continue // The vbucketIds list hasn't changed, so no-op.
 		}
+		// TODO: start stream and manage it.
 	}
 }
 
