@@ -37,13 +37,28 @@ type BucketDataSource interface {
 }
 
 type BucketDataSourceOptions struct {
-	ClusterManagerBackoffFactor float32
-	ClusterManagerSleepInitMS   int
-	ClusterManagerSleepMaxMS    int
+	// Used during DCP stream setup
+	Name string
 
+	// Factor (like 1.5) to increase sleep time between retries
+	// in connecting to get a cluster map from the cluster manager.
+	ClusterManagerBackoffFactor float32
+
+	// Initial sleep time before the first retry to the cluster manager.
+	ClusterManagerSleepInitMS int
+
+	// Maximum sleep time between retries to the cluster manager.
+	ClusterManagerSleepMaxMS int
+
+	// Factor (like 1.5) to increase sleep time between retries
+	// in connecting to a data manager node.
 	DataManagerBackoffFactor float32
-	DataManagerSleepInitMS   int
-	DataManagerSleepMaxMS    int
+
+	// Initial sleep time before the first retry to a data manager.
+	DataManagerSleepInitMS int
+
+	// Maximum sleep time between retries to the data manager.
+	DataManagerSleepMaxMS int
 }
 
 var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
@@ -141,7 +156,7 @@ func (d *bucketDataSource) Start() error {
 
 	go ExponentialBackoffLoop("bucketDataSource.clusterManagerOnce",
 		func() int { return d.refreshCluster() },
-		int(sleepInitMS), backoffFactor, int(sleepMaxMS))
+		sleepInitMS, backoffFactor, sleepMaxMS)
 
 	go d.refreshStreams()
 
@@ -277,10 +292,33 @@ func (d *bucketDataSource) refreshStreams() {
 
 func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uint16) {
 	curVBucketIds := []uint16{}
+
+	backoffFactor := d.options.DataManagerBackoffFactor
+	if backoffFactor <= 0.0 {
+		backoffFactor = DefaultBucketDataSourceOptions.DataManagerBackoffFactor
+	}
+	sleepInitMS := d.options.DataManagerSleepInitMS
+	if sleepInitMS <= 0 {
+		sleepInitMS = DefaultBucketDataSourceOptions.DataManagerSleepInitMS
+	}
+	sleepMaxMS := d.options.DataManagerSleepMaxMS
+	if sleepMaxMS <= 0 {
+		sleepMaxMS = DefaultBucketDataSourceOptions.DataManagerSleepMaxMS
+	}
+
+	name := "cbdatasource"
+
+	go ExponentialBackoffLoop(name,
+		func() int {
+			return -1
+		},
+		sleepInitMS, backoffFactor, sleepMaxMS)
+
 	for newVBucketIds := range newVBucketIdsCh {
 		if reflect.DeepEqual(curVBucketIds, newVBucketIds) {
 			continue // The vbucketIds list hasn't changed, so no-op.
 		}
+
 		// TODO: start stream and manage it.
 	}
 }
