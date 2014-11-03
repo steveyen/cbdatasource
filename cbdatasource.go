@@ -405,6 +405,31 @@ loop:
 				// TODO: save the flog in the receiver
 				fmt.Println("stream-req", status, rollback, flog, err)
 				continue loop
+
+			case gomemcached.UPR_MUTATION,
+				gomemcached.UPR_DELETION,
+				gomemcached.UPR_EXPIRATION:
+
+			case gomemcached.UPR_STREAMEND:
+			case gomemcached.UPR_ADDSTREAM:
+			case gomemcached.UPR_CLOSESTREAM:
+
+			case gomemcached.UPR_CONTROL,
+				gomemcached.UPR_BUFFERACK:
+
+			case gomemcached.UPR_NOOP:
+				sendCh <- &gomemcached.MCRequest{
+					Opcode: gomemcached.UPR_NOOP,
+				}
+
+			case gomemcached.UPR_SNAPSHOT:
+				snapStart := binary.BigEndian.Uint64(res.Extras[0:8])
+				snapEnd := binary.BigEndian.Uint64(res.Extras[8:16])
+				snapType := binary.BigEndian.Uint32(res.Extras[16:20])
+				fmt.Println("snpashot", snapStart, snapEnd, snapType)
+
+			default:
+				fmt.Println("unknown opcode")
 			}
 
 			fmt.Printf("%d, %#v", vbucketId, res) // TODO.
