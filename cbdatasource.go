@@ -32,7 +32,7 @@ type Receiver interface {
 	OnDocUpdate(vbucketId uint16, k, v []byte) error
 	OnDocDelete(vbucketId uint16, k []byte) error
 	Snapshot() error
-	Rollback() error
+	Rollback(vbucketId uint16, rollbackSeq uint64) error
 }
 
 type ReceiverVBucketState struct {
@@ -415,26 +415,51 @@ loop:
 
 			switch res.Opcode {
 			case gomemcached.UPR_STREAMREQ:
-				status, rollback, flog, err := HandleStreamReq(res)
-				if status != gomemcached.SUCCESS {
+				if vbucketIdState != "requested" {
+					d.receiver.OnError(fmt.Errorf(
+						"bad streamreq state, vbucketId: %d, res: %#v",
+						vbucketId, res))
+					return cleanup(1)
+				}
+
+				if res.Status != gomemcached.SUCCESS {
 					delete(currVBucketIds, vbucketId)
-					if status == gomemcached.ROLLBACK {
-						// TODO: tell the receiver, then retry a streamreq.
+					if res.Status == gomemcached.ROLLBACK {
+						if len(res.Extras) != 8 {
+							d.receiver.OnError(fmt.Errorf("invalid rollback extras: %v\n",
+								res.Extras))
+							return cleanup(1)
+						}
+						rollbackSeq := binary.BigEndian.Uint64(res.Extras)
+						err := d.receiver.Rollback(vbucketId, rollbackSeq)
+						if err != nil {
+							d.receiver.OnError(err)
+							return cleanup(1)
+						}
+						currVBucketIds[vbucketId] = "requested"
+						err = d.sendStreamReq(sendCh, vbucketId)
+						if err != nil {
+							d.receiver.OnError(err)
+							return cleanup(1)
+						}
 						continue loop
 					}
+
 					// Maybe the vbucket moved, so try a cluster refresh.
 					go func() { d.refreshClusterCh <- "stream-req-error" }()
 					continue loop
 				}
-				if currVBucketIds[vbucketId] != "requested" {
-					d.receiver.OnError(fmt.Errorf("expected vbucket requested state, got: %s",
-						currVBucketIds[vbucketId]))
-					// TODO: tell the receiver, then retry a streamreq.
-					continue loop
+
+				flog, err := ParseFailoverLog(res.Body[:])
+				if err != nil {
+					d.receiver.OnError(err)
+					return cleanup(1)
 				}
+
 				currVBucketIds[vbucketId] = "running"
-				// TODO: save the flog in the receiver
-				fmt.Println("stream-req", status, rollback, flog, err)
+
+				fmt.Println("flog:", flog)
+				// TODO: tell receiver about the failover log.
 				continue loop
 
 			case gomemcached.UPR_MUTATION,
@@ -442,11 +467,18 @@ loop:
 				gomemcached.UPR_EXPIRATION:
 
 			case gomemcached.UPR_STREAMEND:
-			case gomemcached.UPR_ADDSTREAM:
+
+			case gomemcached.UPR_OPEN,
+				gomemcached.UPR_ADDSTREAM:
+				// TODO: these are unexpected.
+
 			case gomemcached.UPR_CLOSESTREAM:
+				delete(currVBucketIds, vbucketId)
 
 			case gomemcached.UPR_CONTROL,
 				gomemcached.UPR_BUFFERACK:
+
+			case gomemcached.UPR_FLUSH:
 
 			case gomemcached.UPR_NOOP:
 				sendCh <- &gomemcached.MCRequest{
@@ -495,7 +527,6 @@ loop:
 				}
 				if state == "" {
 					currVBucketIds[wantVBucketId] = "requested"
-
 					err := d.sendStreamReq(sendCh, wantVBucketId)
 					if err != nil {
 						d.receiver.OnError(err)
@@ -622,25 +653,6 @@ func UprStreamReq(vbucketId uint16, flags uint32, vbucketUUID,
 	binary.BigEndian.PutUint64(rq.Extras[32:40], snapStart)
 	binary.BigEndian.PutUint64(rq.Extras[40:48], snapEnd)
 	return rq
-}
-
-func HandleStreamReq(res *gomemcached.MCResponse) (
-	gomemcached.Status, uint64, *memcached.FailoverLog, error) {
-	switch {
-	case res.Status == gomemcached.ROLLBACK:
-		if len(res.Extras) != 8 {
-			return res.Status, 0, nil,
-				fmt.Errorf("invalid rollback extras: %v\n", res.Extras)
-		}
-		return res.Status, binary.BigEndian.Uint64(res.Extras), nil, nil
-
-	case res.Status != gomemcached.SUCCESS:
-		return res.Status, 0, nil,
-			fmt.Errorf("unexpected status %v, for %v", res.Status, res.Opaque)
-	}
-
-	flog, err := ParseFailoverLog(res.Body[:])
-	return res.Status, 0, flog, err
 }
 
 func ParseFailoverLog(body []byte) (*memcached.FailoverLog, error) {
