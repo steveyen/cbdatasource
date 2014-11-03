@@ -170,7 +170,7 @@ serverURLs:
 		bucket, err := getBucket(serverURL,
 			d.poolName, d.bucketName, d.bucketUUID, d.authFunc)
 		if err != nil {
-			err := d.receiver.OnError(err)
+			err = d.receiver.OnError(err)
 			if err != nil {
 				return -1
 			}
