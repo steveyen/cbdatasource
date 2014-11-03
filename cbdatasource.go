@@ -15,6 +15,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
@@ -64,6 +65,7 @@ type BucketDataSourceOptions struct {
 	DataManagerSleepMaxMS int
 
 	FeedBufferSizeBytes uint32
+	FeedBufferAckThreshold float32
 }
 
 var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
@@ -76,6 +78,7 @@ var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 	DataManagerSleepMaxMS:    1000,
 
 	FeedBufferSizeBytes: 20000000, // ~20MB; see UPR_CONTROL/connection_buffer_size.
+	FeedBufferAckThreshold: 0.2,
 }
 
 type BucketDataSourceStats struct {
@@ -343,16 +346,14 @@ func (d *bucketDataSource) worker(server string, newVBucketIdsCh chan []uint16) 
 	return -1
 }
 
-func UPROpen(mc *memcached.Client, name string, sequence uint32) error {
+func UPROpen(mc *memcached.Client, name string, sequence uint32, bufSize uint32) error {
 	rq := &gomemcached.MCRequest{
 		Opcode: gomemcached.UPR_OPEN,
 		Key:    []byte(name),
 		Opaque: 0xf00d1234,
+		Extras: make([]byte, 8),
 	}
-
-	rq.Extras = make([]byte, 8)
 	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
-
 	flags := uint32(1) // TODO: 0 for consumer, but what does this mean?
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags)
 
@@ -371,6 +372,16 @@ func UPROpen(mc *memcached.Client, name string, sequence uint32) error {
 	}
 	if res.Status != gomemcached.SUCCESS {
 		return fmt.Errorf("UPROpen failed, status: %v, %#v", res.Status, res)
+	}
+	if bufSize > 0 {
+		rq := &gomemcached.MCRequest{
+			Opcode: gomemcached.UPR_CONTROL,
+			Key:    []byte("connection_buffer_size"),
+			Body:   []byte(strconv.Itoa(int(bufSize))),
+		}
+		if err = mc.Transmit(rq); err != nil {
+			return err
+		}
 	}
 	return nil
 }
