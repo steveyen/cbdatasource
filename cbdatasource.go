@@ -23,10 +23,10 @@ import (
 
 type Receiver interface {
 	OnError(error)
-	GetMetaData() ([]byte, error)
-	SetMetaData([]byte) error
-	OnDocUpdate() error
-	OnDocDelete() error
+	GetMetaData(vbucketId uint16) ([]byte, error)
+	SetMetaData(vbucketId uint16, v []byte) error
+	OnDocUpdate(vbucketId uint16, k, v []byte) error
+	OnDocDelete(vbucketId uint16, k[]byte) error
 	Snapshot() error
 	Rollback() error
 }
