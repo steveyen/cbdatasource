@@ -60,6 +60,8 @@ type BucketDataSourceOptions struct {
 
 	// Maximum sleep time between retries to the data manager.
 	DataManagerSleepMaxMS int
+
+	FeedBufferSizeBytes uint32
 }
 
 var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
@@ -70,6 +72,8 @@ var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 	DataManagerBackoffFactor: 1.5,
 	DataManagerSleepInitMS:   100,
 	DataManagerSleepMaxMS:    1000,
+
+	FeedBufferSizeBytes: 20000000, // ~20MB; see UPR_CONTROL/connection_buffer_size.
 }
 
 type BucketDataSourceStats struct {
@@ -178,7 +182,7 @@ func (d *bucketDataSource) refreshCluster() int {
 			d.receiver.OnError(fmt.Errorf("no vbm,"+
 				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
 				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
-			continue
+			continue // Try another serverURL.
 		}
 		bucket.Close()
 
@@ -188,15 +192,15 @@ func (d *bucketDataSource) refreshCluster() int {
 		d.m.Unlock()
 
 		if !vbmSame {
-			d.refreshStreamsCh <- "new-vbm"
+			d.refreshStreamsCh <- "new-vbm" // Kick the streams to refresh.
 		}
 
-		_, alive := <-d.refreshClusterCh
-		if !alive {
+		_, alive := <-d.refreshClusterCh // Wait for a refresh kick.
+		if !alive {                      // Or, a close to shutdown.
 			return -1
 		}
 
-		return 1
+		return 1 // Restart at the first server.
 	}
 
 	return 0 // Ran through all the servers, so no progress.
@@ -273,8 +277,6 @@ func (d *bucketDataSource) refreshStreams() {
 }
 
 func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uint16) {
-	curVBucketIds := []uint16{}
-
 	backoffFactor := d.options.DataManagerBackoffFactor
 	if backoffFactor <= 0.0 {
 		backoffFactor = DefaultBucketDataSourceOptions.DataManagerBackoffFactor
@@ -291,10 +293,38 @@ func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uin
 	name := "cbdatasource"
 
 	go ExponentialBackoffLoop(name,
-		func() int {
-			return -1
-		},
+		func() int { return d.worker(server, newVBucketIdsCh) },
 		sleepInitMS, backoffFactor, sleepMaxMS)
+}
+
+func (d *bucketDataSource) worker(server string, newVBucketIdsCh chan []uint16) int {
+	client, err := memcached.Connect("tcp", server)
+	if err != nil {
+		d.receiver.OnError(err)
+		return 0
+	}
+
+	// Call client.Auth(user, pswd).
+
+	feed, err := client.NewUprFeed()
+	if err != nil {
+		client.Close()
+		d.receiver.OnError(err)
+		return 0
+	}
+
+	uprOpenName := "UprOpenName" // TODO: What is this?
+	uprOpenSequence := uint32(0) // TODO: What is this?
+
+	err = feed.UprOpen(uprOpenName, uprOpenSequence,
+		d.options.FeedBufferSizeBytes)
+	if err != nil {
+		feed.Close()
+		client.Close()
+		return 0
+	}
+
+	curVBucketIds := []uint16{}
 
 	for newVBucketIds := range newVBucketIdsCh {
 		if reflect.DeepEqual(curVBucketIds, newVBucketIds) {
@@ -303,6 +333,8 @@ func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uin
 
 		// TODO: start stream and manage it.
 	}
+
+	return 0
 }
 
 func (d *bucketDataSource) Stats() BucketDataSourceStats {
@@ -333,11 +365,6 @@ func getBucket(serverURL, poolName, bucketName, bucketUUID string,
 			serverURL, bucketName, bucketUUID, bucket.UUID)
 	}
 	return bucket, nil
-}
-
-func connectDataNode(hostPort string, authFunc AuthFunc) (*memcached.Client, error) {
-	// TODO: Use authFunc.
-	return memcached.Connect("tcp", hostPort)
 }
 
 // Calls f() in a loop, sleeping in an exponential backoff if needed.
