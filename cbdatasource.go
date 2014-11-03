@@ -26,7 +26,7 @@ type Receiver interface {
 	GetMetaData(vbucketId uint16) ([]byte, error)
 	SetMetaData(vbucketId uint16, v []byte) error
 	OnDocUpdate(vbucketId uint16, k, v []byte) error
-	OnDocDelete(vbucketId uint16, k[]byte) error
+	OnDocDelete(vbucketId uint16, k []byte) error
 	Snapshot() error
 	Rollback() error
 }
@@ -158,7 +158,7 @@ func (d *bucketDataSource) Start() error {
 	}
 
 	go func() {
-		ExponentialBackoffLoop("bucketDataSource.clusterManagerOnce",
+		ExponentialBackoffLoop("cbdatasource.refreshCluster",
 			func() int { return d.refreshCluster() },
 			sleepInitMS, backoffFactor, sleepMaxMS)
 
@@ -198,7 +198,7 @@ func (d *bucketDataSource) refreshCluster() int {
 		}
 
 		_, alive := <-d.refreshClusterCh // Wait for a refresh kick.
-		if !alive {                      // Or, if it closed then shutdown.
+		if !alive {                      // Or, if we're closed then shutdown.
 			return -1
 		}
 
@@ -273,6 +273,7 @@ func (d *bucketDataSource) refreshStreams() {
 		}
 	}
 
+	// We reach here when we need to shutdown.
 	for _, workerCh := range workers {
 		close(workerCh)
 	}
@@ -292,9 +293,7 @@ func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uin
 		sleepMaxMS = DefaultBucketDataSourceOptions.DataManagerSleepMaxMS
 	}
 
-	name := "cbdatasource"
-
-	go ExponentialBackoffLoop(name,
+	go ExponentialBackoffLoop("cbdatasource.worker",
 		func() int { return d.worker(server, newVBucketIdsCh) },
 		sleepInitMS, backoffFactor, sleepMaxMS)
 }
