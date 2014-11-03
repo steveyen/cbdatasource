@@ -488,9 +488,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					go func() { d.refreshClusterCh <- "stream-end" }()
 				}
 
-			case gomemcached.UPR_CLOSESTREAM:
-				delete(currVBucketIds, vbucketId)
-
 			case gomemcached.UPR_CONTROL:
 				if res.Status != gomemcached.SUCCESS {
 					return cleanup(1, fmt.Errorf("not success control: %#v", res))
@@ -518,11 +515,16 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 			case gomemcached.UPR_OPEN:
 				// Opening was long ago, so we should not see an UPR_OPEN responses.
-				panic(fmt.Sprintf("unexpected open opcode, res: %#v", res))
+				panic(fmt.Sprintf("unexpected upr_open, res: %#v", res))
 
 			case gomemcached.UPR_ADDSTREAM:
 				// This normally comes from ns-server / dcp-migrator.
-				panic(fmt.Sprintf("unexpected addstream opcode, res: %#v", res))
+				panic(fmt.Sprintf("unexpected upr_addstream, res: %#v", res))
+
+			case gomemcached.UPR_CLOSESTREAM:
+				// Shouldn't see this, as producers (oddly!) respond
+				// with STREAM_END to our CLOSE_STREAM requests.
+				panic(fmt.Sprintf("unexpected upr_closestream, res: %#v", res))
 
 			default:
 				panic(fmt.Sprintf("unknown opcode, res: %#v", res))
@@ -702,14 +704,14 @@ func ParseFailoverLog(body []byte) (*memcached.FailoverLog, error) {
 		err := fmt.Errorf("invalid body length %v, in failover-log", len(body))
 		return nil, err
 	}
-	log := make(memcached.FailoverLog, len(body)/16)
+	flog := make(memcached.FailoverLog, len(body)/16)
 	for i, j := 0, 0; i < len(body); i += 16 {
 		vuuid := binary.BigEndian.Uint64(body[i : i+8])
 		seqno := binary.BigEndian.Uint64(body[i+8 : i+16])
-		log[j] = [2]uint64{vuuid, seqno}
+		flog[j] = [2]uint64{vuuid, seqno}
 		j++
 	}
-	return &log, nil
+	return &flog, nil
 }
 
 // --------------------------------------------------------------
