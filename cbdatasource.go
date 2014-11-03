@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/couchbase/gomemcached/client"
 	"github.com/couchbaselabs/go-couchbase"
 )
 
@@ -335,6 +336,11 @@ func getBucket(serverURL, poolName, bucketName, bucketUUID string,
 			serverURL, bucketName, bucketUUID, bucket.UUID)
 	}
 	return bucket, nil
+}
+
+func connectDataNode(hostPort string, authFunc AuthFunc) (*memcached.Client, error) {
+	// TODO: Use authFunc.
+	return memcached.Connect("tcp", hostPort)
 }
 
 // Calls f() in a loop, sleeping in an exponential backoff if needed.
