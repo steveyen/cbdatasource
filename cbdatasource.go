@@ -33,6 +33,7 @@ type Receiver interface {
 	OnDocDelete(vbucketId uint16, k []byte) error
 	Snapshot() error
 	Rollback(vbucketId uint16, rollbackSeq uint64) error
+	SaveFailOverLog(vbucketId uint16, flog interface{}) error
 }
 
 type ReceiverVBucketState struct {
@@ -393,7 +394,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	// "" (dead/closed/unknown), "requested", "running", "closing".
 	currVBucketIds := map[uint16]string{}
 
-loop:
 	for {
 		select {
 		case <-sendErrCh:
@@ -416,51 +416,70 @@ loop:
 			}
 
 			switch res.Opcode {
+			case gomemcached.UPR_MUTATION,
+				gomemcached.UPR_DELETION,
+				gomemcached.UPR_EXPIRATION:
+				if vbucketIdState != "running" {
+					return cleanup(1, fmt.Errorf("state not running,"+
+						" vbucketId: %d, res: %#v", vbucketId, res))
+				}
+				if res.Opcode == gomemcached.UPR_MUTATION {
+					err = d.receiver.OnDocUpdate(vbucketId, res.Key, res.Body)
+				} else {
+					err = d.receiver.OnDocDelete(vbucketId, res.Key)
+				}
+				if err != nil {
+					return cleanup(1, err)
+				}
+
 			case gomemcached.UPR_STREAMREQ:
+				delete(currVBucketIds, vbucketId)
+
 				if vbucketIdState != "requested" {
 					return cleanup(1, fmt.Errorf("bad streamreq state,"+
 						" vbucketId: %d, res: %#v", vbucketId, res))
 				}
 
 				if res.Status != gomemcached.SUCCESS {
-					delete(currVBucketIds, vbucketId)
 					if res.Status == gomemcached.ROLLBACK {
 						if len(res.Extras) != 8 {
 							return cleanup(1, fmt.Errorf("invalid rollback extras: %v\n",
 								res.Extras))
 						}
+
 						rollbackSeq := binary.BigEndian.Uint64(res.Extras)
 						err := d.receiver.Rollback(vbucketId, rollbackSeq)
 						if err != nil {
 							return cleanup(1, err)
 						}
+
 						currVBucketIds[vbucketId] = "requested"
 						err = d.sendStreamReq(sendCh, vbucketId)
 						if err != nil {
 							return cleanup(1, err)
 						}
-						continue loop
+					} else {
+						// Maybe the vbucket moved, so try a cluster refresh.
+						// TODO: Maybe explicitly look for NOT_MY_VBUCKET status?
+						//
+						go func() { d.refreshClusterCh <- "stream-req-error" }()
+					}
+				} else {
+					// SUCCESS case.
+					flog, err := ParseFailoverLog(res.Body[:])
+					if err != nil {
+						return cleanup(1, err)
 					}
 
-					// Maybe the vbucket moved, so try a cluster refresh.
-					go func() { d.refreshClusterCh <- "stream-req-error" }()
-					continue loop
+					fmt.Println("flog:", flog)
+
+					err = d.receiver.SaveFailOverLog(vbucketId, flog)
+					if err != nil {
+						return cleanup(1, err)
+					}
+
+					currVBucketIds[vbucketId] = "running"
 				}
-
-				flog, err := ParseFailoverLog(res.Body[:])
-				if err != nil {
-					return cleanup(1, err)
-				}
-
-				currVBucketIds[vbucketId] = "running"
-
-				fmt.Println("flog:", flog)
-				// TODO: tell receiver about the failover log.
-				continue loop
-
-			case gomemcached.UPR_MUTATION,
-				gomemcached.UPR_DELETION,
-				gomemcached.UPR_EXPIRATION:
 
 			case gomemcached.UPR_STREAMEND:
 
