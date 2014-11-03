@@ -26,12 +26,22 @@ import (
 
 type Receiver interface {
 	OnError(error)
+	GetVBucketState(vbucketId uint16) (*ReceiverVBucketState, error)
 	GetMetaData(vbucketId uint16) ([]byte, error)
 	SetMetaData(vbucketId uint16, v []byte) error
 	OnDocUpdate(vbucketId uint16, k, v []byte) error
 	OnDocDelete(vbucketId uint16, k []byte) error
 	Snapshot() error
 	Rollback() error
+}
+
+type ReceiverVBucketState struct {
+	VBucketId   uint16 `json:"vbucketId"`
+	VBucketUUID uint64 `json:"vbucketUUID"`
+	SeqStart    uint64 `json:"seqStart"`
+	SeqEnd      uint64 `json:"seqEnd"`
+	SnapStart   uint64 `json:"snapStart"`
+	SnapEnd     uint64 `json:"snapEnd"`
 }
 
 type BucketDataSource interface {
@@ -486,22 +496,35 @@ loop:
 				if state == "" {
 					currVBucketIds[wantVBucketId] = "requested"
 
-					// TODO: Need to get these from the receiver.
-					flags := uint32(0)
-					vbucketUUID := uint64(0)
-					seqStart := uint64(0)
-					seqEnd := uint64(0xFFFFFFFFFFFFFFFF)
-					snapStart := uint64(0)
-					snapEnd := uint64(0)
-
-					sendCh <- UprStreamReq(wantVBucketId, flags,
-						vbucketUUID, seqStart, seqEnd, snapStart, snapEnd)
+					err := d.sendStreamReq(sendCh, wantVBucketId)
+					if err != nil {
+						d.receiver.OnError(err)
+						return cleanup(1)
+					}
 				} // Else, state of "requested" or "running", so no-op.
 			}
 		}
 	}
 
 	return -1 // Unreached.
+}
+
+func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
+	vbucketId uint16) error {
+	s, err := d.receiver.GetVBucketState(vbucketId)
+	if err != nil {
+		return err
+	}
+	if s == nil {
+		return fmt.Errorf("got nil ReceiverVBucketState, vbucketId: %d", vbucketId)
+	}
+
+	flags := uint32(0) // TODO: What are the flags?
+
+	sendCh <- UprStreamReq(vbucketId, flags,
+		s.VBucketUUID, s.SeqStart, s.SeqEnd, s.SnapStart, s.SnapEnd)
+
+	return nil
 }
 
 func (d *bucketDataSource) Stats() BucketDataSourceStats {
