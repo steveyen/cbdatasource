@@ -12,11 +12,13 @@
 package cbdatasource
 
 import (
+	"encoding/binary"
 	"fmt"
 	"reflect"
 	"sync"
 	"time"
 
+	"github.com/couchbase/gomemcached"
 	"github.com/couchbase/gomemcached/client"
 	"github.com/couchbaselabs/go-couchbase"
 )
@@ -339,6 +341,38 @@ func (d *bucketDataSource) worker(server string, newVBucketIdsCh chan []uint16) 
 	feed.Close()
 	client.Close()
 	return -1
+}
+
+func UPROpen(mc *memcached.Client, name string, sequence uint32) error {
+	rq := &gomemcached.MCRequest{
+		Opcode: gomemcached.UPR_OPEN,
+		Key:    []byte(name),
+		Opaque: 0xf00d1234,
+	}
+
+	rq.Extras = make([]byte, 8)
+	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
+
+	flags := uint32(1) // TODO: 0 for consumer, but what does this mean?
+	binary.BigEndian.PutUint32(rq.Extras[4:], flags)
+
+	if err := mc.Transmit(rq); err != nil {
+		return err
+	}
+	res, err := mc.Receive()
+	if err != nil {
+		return err
+	}
+	if res.Opcode != gomemcached.UPR_OPEN {
+		return fmt.Errorf("UPROpen unexpected #opcode %v", res.Opcode)
+	}
+	if rq.Opaque != res.Opaque {
+		return fmt.Errorf("UPROpen opaque mismatch, %v over %v", res.Opaque, res.Opaque)
+	}
+	if res.Status != gomemcached.SUCCESS {
+		return fmt.Errorf("UPROpen failed, status: %v, %#v", res.Status, res)
+	}
+	return nil
 }
 
 func (d *bucketDataSource) Stats() BucketDataSourceStats {
