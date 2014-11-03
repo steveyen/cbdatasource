@@ -337,7 +337,10 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	sendCh := make(chan *gomemcached.MCRequest)
 	recvCh := make(chan *gomemcached.MCResponse)
 
-	cleanup := func(progress int) int {
+	cleanup := func(progress int, err error) int {
+		if err != nil {
+			d.receiver.OnError(err)
+		}
 		go func() {
 			close(sendCh)
 			for _ = range recvCh {
@@ -394,11 +397,11 @@ loop:
 	for {
 		select {
 		case <-sendErrCh:
-			return cleanup(1) // We saw disconnect; assume we made progress.
+			return cleanup(1, nil) // We saw disconnect; assume we made progress.
 
 		case res, alive := <-recvCh:
 			if !alive {
-				return cleanup(1) // We saw disconnect; assume we made progress.
+				return cleanup(1, nil) // We saw disconnect; assume we made progress.
 			}
 
 			vbucketId := uint16(res.Opaque)
@@ -408,39 +411,33 @@ loop:
 				vbucketId, vbucketIdState, res)
 
 			if vbucketIdState == "" {
-				d.receiver.OnError(fmt.Errorf("unknown state, vbucketId: %d, res: %#v",
-					vbucketId, res))
-				return cleanup(1)
+				return cleanup(1, fmt.Errorf("unknown state,"+
+					" vbucketId: %d, res: %#v", vbucketId, res))
 			}
 
 			switch res.Opcode {
 			case gomemcached.UPR_STREAMREQ:
 				if vbucketIdState != "requested" {
-					d.receiver.OnError(fmt.Errorf(
-						"bad streamreq state, vbucketId: %d, res: %#v",
-						vbucketId, res))
-					return cleanup(1)
+					return cleanup(1, fmt.Errorf("bad streamreq state,"+
+						" vbucketId: %d, res: %#v", vbucketId, res))
 				}
 
 				if res.Status != gomemcached.SUCCESS {
 					delete(currVBucketIds, vbucketId)
 					if res.Status == gomemcached.ROLLBACK {
 						if len(res.Extras) != 8 {
-							d.receiver.OnError(fmt.Errorf("invalid rollback extras: %v\n",
+							return cleanup(1, fmt.Errorf("invalid rollback extras: %v\n",
 								res.Extras))
-							return cleanup(1)
 						}
 						rollbackSeq := binary.BigEndian.Uint64(res.Extras)
 						err := d.receiver.Rollback(vbucketId, rollbackSeq)
 						if err != nil {
-							d.receiver.OnError(err)
-							return cleanup(1)
+							return cleanup(1, err)
 						}
 						currVBucketIds[vbucketId] = "requested"
 						err = d.sendStreamReq(sendCh, vbucketId)
 						if err != nil {
-							d.receiver.OnError(err)
-							return cleanup(1)
+							return cleanup(1, err)
 						}
 						continue loop
 					}
@@ -452,8 +449,7 @@ loop:
 
 				flog, err := ParseFailoverLog(res.Body[:])
 				if err != nil {
-					d.receiver.OnError(err)
-					return cleanup(1)
+					return cleanup(1, err)
 				}
 
 				currVBucketIds[vbucketId] = "running"
@@ -497,7 +493,7 @@ loop:
 
 		case wantVBucketIdsArr, alive := <-workerCh:
 			if !alive {
-				return cleanup(-1) // We've been asked to shutdown.
+				return cleanup(-1, nil) // We've been asked to shutdown.
 			}
 
 			wantVBucketIds := map[uint16]bool{}
@@ -521,16 +517,14 @@ loop:
 			for wantVBucketId, _ := range wantVBucketIds {
 				state := currVBucketIds[wantVBucketId]
 				if state == "closing" {
-					d.receiver.OnError(fmt.Errorf("wanting a closing vbucket: %d",
+					return cleanup(1, fmt.Errorf("wanting a closing vbucket: %d",
 						wantVBucketId))
-					return cleanup(1)
 				}
 				if state == "" {
 					currVBucketIds[wantVBucketId] = "requested"
 					err := d.sendStreamReq(sendCh, wantVBucketId)
 					if err != nil {
-						d.receiver.OnError(err)
-						return cleanup(1)
+						return cleanup(1, err)
 					}
 				} // Else, state of "requested" or "running", so no-op.
 			}
