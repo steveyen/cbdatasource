@@ -336,6 +336,45 @@ func (d *bucketDataSource) worker(server string, newVBucketIdsCh chan []uint16) 
 	return -1 // We reach here when asked to shutdown.
 }
 
+func (d *bucketDataSource) Stats() BucketDataSourceStats {
+	return BucketDataSourceStats{}
+}
+
+func (d *bucketDataSource) Close() error {
+	d.m.Lock()
+	defer d.m.Unlock()
+	if d.life != "running" {
+		return fmt.Errorf("Close() called when not in running state: %s", d.life)
+	}
+	d.life = "closed"
+	close(d.refreshClusterCh)
+	return nil
+}
+
+// --------------------------------------------------------------
+
+// TODO: Use AUTH'ed approach.
+func getBucket(serverURL, poolName, bucketName, bucketUUID string,
+	authFunc AuthFunc) (
+	*couchbase.Bucket, error) {
+	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucket == nil {
+		return nil, fmt.Errorf("unknown bucket,"+
+			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+			serverURL, bucketName, bucketUUID, bucket.UUID)
+	}
+	if bucketUUID != "" && bucketUUID != bucket.UUID {
+		bucket.Close()
+		return nil, fmt.Errorf("mismatched bucket uuid,"+
+			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+			serverURL, bucketName, bucketUUID, bucket.UUID)
+	}
+	return bucket, nil
+}
+
 func UPROpen(mc *memcached.Client, name string, sequence uint32, bufSize uint32) error {
 	rq := &gomemcached.MCRequest{
 		Opcode: gomemcached.UPR_OPEN,
@@ -403,6 +442,7 @@ func SendUprCloseStream(mc *memcached.Client, vbucketId uint16,
 		VBucket: vbucketId,
 		Opaque:  ComposeOpaque(vbucketId, opaqueMSB),
 	}
+
 	return mc.Transmit(rq);
 }
 
@@ -410,42 +450,7 @@ func ComposeOpaque(vbucketId, opaqueMSB uint16) uint32 {
 	return (uint32(opaqueMSB) << 16) | uint32(vbucketId)
 }
 
-func (d *bucketDataSource) Stats() BucketDataSourceStats {
-	return BucketDataSourceStats{}
-}
-
-func (d *bucketDataSource) Close() error {
-	d.m.Lock()
-	defer d.m.Unlock()
-	if d.life != "running" {
-		return fmt.Errorf("Close() called when not in running state: %s", d.life)
-	}
-	d.life = "closed"
-	close(d.refreshClusterCh)
-	return nil
-}
-
-// TODO: Use AUTH'ed approach.
-func getBucket(serverURL, poolName, bucketName, bucketUUID string,
-	authFunc AuthFunc) (
-	*couchbase.Bucket, error) {
-	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
-	if err != nil {
-		return nil, err
-	}
-	if bucket == nil {
-		return nil, fmt.Errorf("unknown bucket,"+
-			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-			serverURL, bucketName, bucketUUID, bucket.UUID)
-	}
-	if bucketUUID != "" && bucketUUID != bucket.UUID {
-		bucket.Close()
-		return nil, fmt.Errorf("mismatched bucket uuid,"+
-			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-			serverURL, bucketName, bucketUUID, bucket.UUID)
-	}
-	return bucket, nil
-}
+// --------------------------------------------------------------
 
 // Calls f() in a loop, sleeping in an exponential backoff if needed.
 // The provided f() function should return < 0 to stop the loop; >= 0
