@@ -166,7 +166,8 @@ func (d *bucketDataSource) Start() error {
 func (d *bucketDataSource) refreshCluster() int {
 serverURLs:
 	for _, serverURL := range d.serverURLs {
-		bucket, err := getBucket(serverURL, d.poolName, d.bucketName, d.bucketUUID)
+		bucket, err := getBucket(serverURL,
+			d.poolName, d.bucketName, d.bucketUUID, d.authFunc)
 		if err != nil {
 			err := d.receiver.OnError(err)
 			if err != nil {
@@ -205,27 +206,6 @@ serverURLs:
 	}
 
 	return 0 // Ran through all the servers, so no progress.
-}
-
-// TODO: Use AUTH'ed approach.
-func getBucket(serverURL, poolName, bucketName, bucketUUID string) (
-	*couchbase.Bucket, error) {
-	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
-	if err != nil {
-		return nil, err
-	}
-	if bucket == nil {
-		return nil, fmt.Errorf("unknown bucket,"+
-			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-			serverURL, bucketName, bucketUUID, bucket.UUID)
-	}
-	if bucketUUID != "" && bucketUUID != bucket.UUID {
-		bucket.Close()
-		return nil, fmt.Errorf("mismatched bucket uuid,"+
-			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-			serverURL, bucketName, bucketUUID, bucket.UUID)
-	}
-	return bucket, nil
 }
 
 func (d *bucketDataSource) refreshStreams() {
@@ -333,6 +313,28 @@ func (d *bucketDataSource) Stats() BucketDataSourceStats {
 
 func (d *bucketDataSource) Close() error {
 	return nil
+}
+
+// TODO: Use AUTH'ed approach.
+func getBucket(serverURL, poolName, bucketName, bucketUUID string,
+	authFunc AuthFunc) (
+	*couchbase.Bucket, error) {
+	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	if bucket == nil {
+		return nil, fmt.Errorf("unknown bucket,"+
+			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+			serverURL, bucketName, bucketUUID, bucket.UUID)
+	}
+	if bucketUUID != "" && bucketUUID != bucket.UUID {
+		bucket.Close()
+		return nil, fmt.Errorf("mismatched bucket uuid,"+
+			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+			serverURL, bucketName, bucketUUID, bucket.UUID)
+	}
+	return bucket, nil
 }
 
 // Calls f() in a loop, sleeping in an exponential backoff if needed.
