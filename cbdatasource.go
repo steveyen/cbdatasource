@@ -31,7 +31,7 @@ type Receiver interface {
 	SetMetaData(vbucketId uint16, v []byte) error
 	OnDocUpdate(vbucketId uint16, k, v []byte) error
 	OnDocDelete(vbucketId uint16, k []byte) error
-	Snapshot() error
+	Snapshot(vbucketId uint16) error
 	Rollback(vbucketId uint16, rollbackSeq uint64) error
 	SaveFailOverLog(vbucketId uint16, flog interface{}) error
 }
@@ -365,19 +365,16 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 		var hdr [gomemcached.HDR_LEN]byte
 		var pkt gomemcached.MCRequest
 
-		totalRecvBytes := uint64(0)
-
 		conn := client.Hijack()
 
 		for {
 			// TODO: memory allocation here.
-			n, err := pkt.Receive(conn, hdr[:])
+			_, err := pkt.Receive(conn, hdr[:])
 			if err != nil {
 				close(recvCh)
 				d.receiver.OnError(err)
 				return
 			}
-			totalRecvBytes += uint64(n)
 			recvCh <- &gomemcached.MCResponse{
 				Opcode: pkt.Opcode,
 				Cas:    pkt.Cas,
@@ -393,6 +390,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	// Values for vbucketId state in currVBucketIds:
 	// "" (dead/closed/unknown), "requested", "running", "closing".
 	currVBucketIds := map[uint16]string{}
+	recvBytesTotal := uint32(0)
+	ackBytes :=
+		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
 
 	for {
 		select {
@@ -482,32 +482,50 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				}
 
 			case gomemcached.UPR_STREAMEND:
-
-			case gomemcached.UPR_OPEN,
-				gomemcached.UPR_ADDSTREAM:
-				// TODO: these are unexpected.
+				delete(currVBucketIds, vbucketId)
 
 			case gomemcached.UPR_CLOSESTREAM:
 				delete(currVBucketIds, vbucketId)
 
-			case gomemcached.UPR_CONTROL,
-				gomemcached.UPR_BUFFERACK:
-
-			case gomemcached.UPR_FLUSH:
-
-			case gomemcached.UPR_NOOP:
-				sendCh <- &gomemcached.MCRequest{
-					Opcode: gomemcached.UPR_NOOP,
+			case gomemcached.UPR_CONTROL, gomemcached.UPR_BUFFERACK:
+				if res.Status != gomemcached.SUCCESS {
+					return cleanup(1, fmt.Errorf("not success in flow: %#v", res))
 				}
 
+			case gomemcached.UPR_NOOP:
+				sendCh <- &gomemcached.MCRequest{Opcode: gomemcached.UPR_NOOP}
+
 			case gomemcached.UPR_SNAPSHOT:
+				if len(res.Extras) < 20 {
+					return cleanup(1, fmt.Errorf("wrong snapshot extras, res: %#v", res))
+				}
 				snapStart := binary.BigEndian.Uint64(res.Extras[0:8])
 				snapEnd := binary.BigEndian.Uint64(res.Extras[8:16])
 				snapType := binary.BigEndian.Uint32(res.Extras[16:20])
-				fmt.Println("snpashot", snapStart, snapEnd, snapType)
+				fmt.Println("snapshot", snapStart, snapEnd, snapType)
+
+			case gomemcached.UPR_FLUSH:
+				panic(fmt.Sprintf("unimplemented flush, res: %#v", res))
+
+			case gomemcached.UPR_OPEN:
+				panic(fmt.Sprintf("unexpected open opcode, res: %#v", res))
+
+			case gomemcached.UPR_ADDSTREAM:
+				panic(fmt.Sprintf("unexpected addstream opcode, res: %#v", res))
 
 			default:
-				fmt.Println("unknown opcode: %d", res.Opcode)
+				panic(fmt.Sprintf("unknown opcode, res: %#v", res))
+			}
+
+			recvBytesTotal +=
+				uint32(gomemcached.HDR_LEN) +
+				uint32(len(res.Key) + len(res.Extras) + len(res.Body))
+			if ackBytes > 0 && recvBytesTotal > ackBytes {
+				ack := &gomemcached.MCRequest{Opcode: gomemcached.UPR_BUFFERACK}
+				ack.Extras = make([]byte, 4) // TODO: Memory mgmt.
+				binary.BigEndian.PutUint32(ack.Extras, uint32(recvBytesTotal))
+				sendCh <- ack
+				recvBytesTotal = 0
 			}
 
 		case wantVBucketIdsArr, alive := <-workerCh:
