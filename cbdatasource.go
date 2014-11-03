@@ -52,30 +52,34 @@ type BucketDataSource interface {
 }
 
 type BucketDataSourceOptions struct {
-	// Used during DCP stream setup
+	// Used during UPR_OPEN stream setup and other debugging messsages.
 	Name string
 
 	// Factor (like 1.5) to increase sleep time between retries
-	// in connecting to get a cluster map from the cluster manager.
+	// in connecting to a cluster manager node.
 	ClusterManagerBackoffFactor float32
 
-	// Initial sleep time before the first retry to the cluster manager.
+	// Initial sleep time (millisecs) before first retry to cluster manager.
 	ClusterManagerSleepInitMS int
 
-	// Maximum sleep time between retries to the cluster manager.
+	// Maximum sleep time (millisecs) between retries to cluster manager.
 	ClusterManagerSleepMaxMS int
 
 	// Factor (like 1.5) to increase sleep time between retries
 	// in connecting to a data manager node.
 	DataManagerBackoffFactor float32
 
-	// Initial sleep time before the first retry to a data manager.
+	// Initial sleep time (millisecs) before first retry to data manager.
 	DataManagerSleepInitMS int
 
-	// Maximum sleep time between retries to the data manager.
+	// Maximum sleep time (millisecs) between retries to data manager.
 	DataManagerSleepMaxMS int
 
-	FeedBufferSizeBytes    uint32
+	// Provided to UPR flow control / buffer size.
+	FeedBufferSizeBytes uint32
+
+	// Used for UPR flow control and buffer-ack when this percentage
+	// of FeedBufferSizeBytes is reached.
 	FeedBufferAckThreshold float32
 }
 
@@ -93,6 +97,7 @@ var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 }
 
 type BucketDataSourceStats struct {
+	// TODO.
 }
 
 // --------------------------------------------------------
@@ -110,8 +115,8 @@ type bucketDataSource struct {
 	refreshClusterCh chan string
 	refreshWorkersCh chan string
 
-	m    sync.Mutex
-	life string // "" (unstarted); "running"; "closed".
+	m    sync.Mutex // Protects all the below fields.
+	life string     // Valid life states: "" (unstarted); "running"; "closed".
 	vbm  *couchbase.VBucketServerMap
 }
 
@@ -227,12 +232,12 @@ func (d *bucketDataSource) refreshCluster() int {
 func (d *bucketDataSource) refreshWorkers() {
 	workers := make(map[string]chan []uint16) // Keyed by server.
 
-	for _ = range d.refreshWorkersCh {
+	for _ = range d.refreshWorkersCh { // Wait for a refresh kick.
 		d.m.Lock()
 		vbm := d.vbm
 		d.m.Unlock()
 
-		// Group the vbucketIds by server.
+		// Group the vbm's vbucketIds by server.
 		vbucketIdsByServer := make(map[string][]uint16)
 
 		for _, vbucketId := range d.vbucketIds {
@@ -263,8 +268,7 @@ func (d *bucketDataSource) refreshWorkers() {
 			if !exists || v == nil {
 				v = []uint16{}
 			}
-			v = append(v, vbucketId)
-			vbucketIdsByServer[masterServer] = v
+			vbucketIdsByServer[masterServer] = append(v, vbucketId)
 		}
 
 		// Close any extraneous workers.
