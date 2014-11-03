@@ -13,6 +13,7 @@ package cbdatasource
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -25,24 +26,59 @@ import (
 )
 
 type Receiver interface {
+	// Invoked in advisory fashion by the BucketDataSource when it
+	// encounters an error.  The BucketDataSource will continue to try
+	// to "heal" and restart connections, etc, as necessary.  The
+	// Receiver has a recourse during these error notifications of
+	// simply Close()'ing the BucketDataSource.
 	OnError(error)
-	GetVBucketState(vbucketId uint16) (*ReceiverVBucketState, error)
-	GetMetaData(vbucketId uint16) ([]byte, error)
-	SetMetaData(vbucketId uint16, v []byte) error
-	OnDocUpdate(vbucketId uint16, k, v []byte) error
-	OnDocDelete(vbucketId uint16, k []byte) error
+
+	// Invoked by the BucketDataSource when it has received a mutation
+	// from the data source.
+	DataUpdate(vbucketId uint16, key []byte, seq uint64, val []byte,
+		r *gomemcached.MCResponse) error
+
+	// Invoked by the BucketDataSource when it has received a deletion
+	// or expiration from the data source.
+	DataDelete(vbucketId uint16, key []byte, seq uint64,
+		r *gomemcached.MCResponse) error
+
+	// An advisory callback invoked by the BucketDataSource when it
+	// has received a start snapshot message from the data source.
+	// The Receiver implementation may choose to optimize persistence
+	// commits for previous snapshots as part of this callback (e.g.,
+	// commit any batch write for the previous snapshot).  Or the
+	// Receiver implementation may choose to do nothing.
 	Snapshot(vbucketId uint16, snapStart, snapEnd uint64, snapType uint32) error
+
+	// The Receiver should persist the value parameter of
+	// SetMetaData() for retrieval during some future call to
+	// GetMetaData(), to help with restarts of DCP streams.
+	SetMetaData(vbucketId uint16, value []byte) error
+
+	// GetMetaData() should return the opaque value previously
+	// provided by an earlier call to SetMetaData().  If there was no
+	// previous call to SetMetaData(), such as in the case of a brand
+	// new instance of a Receiver (as opposed to a restarted or
+	// reloaded Receiver), the Receiver should return (nil, 0, nil)
+	// for (value, lastSeq, err), respectively.  The lastSeq should be
+	// the last sequence number persisted during calls to DataUpdate()
+	// / DataDelete().
+	GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error)
+
+	// Invoked by the BucketDataSource when the datasource signals a
+	// rollback during stream initialization.
 	Rollback(vbucketId uint16, rollbackSeq uint64) error
-	SaveFailOverLog(vbucketId uint16, flog interface{}) error
 }
 
-type ReceiverVBucketState struct {
+type VBucketMetaData struct {
 	VBucketId   uint16 `json:"vbucketId"`
 	VBucketUUID uint64 `json:"vbucketUUID"`
 	SeqStart    uint64 `json:"seqStart"`
 	SeqEnd      uint64 `json:"seqEnd"`
 	SnapStart   uint64 `json:"snapStart"`
 	SnapEnd     uint64 `json:"snapEnd"`
+	FailOverLog [][]uint64
 }
 
 type BucketDataSource interface {
@@ -183,6 +219,7 @@ func (d *bucketDataSource) Start() error {
 			func() int { return d.refreshCluster() },
 			sleepInitMS, backoffFactor, sleepMaxMS)
 
+		// We reach here when we need to shutdown.
 		close(d.refreshWorkersCh)
 	}()
 
@@ -426,10 +463,12 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					return cleanup(1, fmt.Errorf("state not running,"+
 						" vbucketId: %d, res: %#v", vbucketId, res))
 				}
+
+				seq := uint64(0) // TODO: make this real.
 				if res.Opcode == gomemcached.UPR_MUTATION {
-					err = d.receiver.OnDocUpdate(vbucketId, res.Key, res.Body)
+					err = d.receiver.DataUpdate(vbucketId, res.Key, seq, res.Body, res)
 				} else {
-					err = d.receiver.OnDocDelete(vbucketId, res.Key)
+					err = d.receiver.DataDelete(vbucketId, res.Key, seq, res)
 				}
 				if err != nil {
 					return cleanup(1, err)
@@ -456,27 +495,32 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 						rollbackSeq := binary.BigEndian.Uint64(res.Extras)
 						err := d.receiver.Rollback(vbucketId, rollbackSeq)
 						if err != nil {
-							return cleanup(1, err)
+							return cleanup(0, err)
 						}
 
 						currVBucketIds[vbucketId] = "requested"
 						err = d.sendStreamReq(sendCh, vbucketId)
 						if err != nil {
-							return cleanup(1, err)
+							return cleanup(0, err)
 						}
 					} else {
 						// Maybe the vbucket moved, so kick off a cluster refresh.
 						go func() { d.refreshClusterCh <- "stream-req-error" }()
 					}
 				} else { // SUCCESS case.
-					flog, err := ParseFailoverLog(res.Body[:])
+					flog, err := ParseFailOverLog(res.Body[:])
 					if err != nil {
 						return cleanup(1, err)
 					}
 
-					fmt.Println("flog:", flog)
+					v, _, err := d.getVBucketMetaData(vbucketId)
+					if err != nil {
+						return cleanup(1, err)
+					}
 
-					err = d.receiver.SaveFailOverLog(vbucketId, flog)
+					v.FailOverLog = flog
+
+					err = d.setVBucketMetaData(vbucketId, v)
 					if err != nil {
 						return cleanup(1, err)
 					}
@@ -593,20 +637,44 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	return -1 // Unreached.
 }
 
-func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
-	vbucketId uint16) error {
-	s, err := d.receiver.GetVBucketState(vbucketId)
+func (d *bucketDataSource) getVBucketMetaData(vbucketId uint16) (
+	*VBucketMetaData, uint64, error) {
+	buf, lastSeq, err := d.receiver.GetMetaData(vbucketId)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	vbucketMetaData := &VBucketMetaData{}
+	if len(buf) > 0 {
+		if err = json.Unmarshal(buf, vbucketMetaData); err != nil {
+			return nil, 0, err
+		}
+	}
+
+	return vbucketMetaData, lastSeq, nil
+}
+
+func (d *bucketDataSource) setVBucketMetaData(vbucketId uint16, v *VBucketMetaData) error {
+	buf, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	if s == nil {
-		return fmt.Errorf("got nil ReceiverVBucketState, vbucketId: %d", vbucketId)
+
+	return d.receiver.SetMetaData(vbucketId, buf)
+}
+
+func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
+	vbucketId uint16) error {
+	vbucketMetaData, lastSeq, err := d.getVBucketMetaData(vbucketId)
+	if err != nil {
+		return err
 	}
 
-	flags := uint32(0) // TODO: What are the flags?
+	flags := uint32(0)
 
-	sendCh <- UprStreamReq(vbucketId, flags,
-		s.VBucketUUID, s.SeqStart, s.SeqEnd, s.SnapStart, s.SnapEnd)
+	sendCh <- UprStreamReq(vbucketId, flags, vbucketMetaData.VBucketUUID,
+		lastSeq, 0xffffffffffffffff,
+		vbucketMetaData.SnapStart, vbucketMetaData.SnapEnd)
 
 	return nil
 }
@@ -708,19 +776,18 @@ func UprStreamReq(vbucketId uint16, flags uint32, vbucketUUID,
 	return rq
 }
 
-func ParseFailoverLog(body []byte) (*memcached.FailoverLog, error) {
+func ParseFailOverLog(body []byte) ([][]uint64, error) {
 	if len(body)%16 != 0 {
-		err := fmt.Errorf("invalid body length %v, in failover-log", len(body))
-		return nil, err
+		return nil, fmt.Errorf("invalid body length %v, in failover-log", len(body))
 	}
-	flog := make(memcached.FailoverLog, len(body)/16)
+	flog := make([][]uint64, len(body)/16)
 	for i, j := 0, 0; i < len(body); i += 16 {
 		vuuid := binary.BigEndian.Uint64(body[i : i+8])
 		seqno := binary.BigEndian.Uint64(body[i+8 : i+16])
-		flog[j] = [2]uint64{vuuid, seqno}
+		flog[j] = []uint64{vuuid, seqno}
 		j++
 	}
-	return &flog, nil
+	return flog, nil
 }
 
 // --------------------------------------------------------------
