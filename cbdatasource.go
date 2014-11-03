@@ -22,7 +22,7 @@ import (
 )
 
 type Receiver interface {
-	OnError(error) error
+	OnError(error)
 	GetMetaData() ([]byte, error)
 	SetMetaData([]byte) error
 	OnDocUpdate() error
@@ -165,27 +165,20 @@ func (d *bucketDataSource) Start() error {
 }
 
 func (d *bucketDataSource) refreshCluster() int {
-serverURLs:
 	for _, serverURL := range d.serverURLs {
 		bucket, err := getBucket(serverURL,
 			d.poolName, d.bucketName, d.bucketUUID, d.authFunc)
 		if err != nil {
-			err = d.receiver.OnError(err)
-			if err != nil {
-				return -1
-			}
-			continue serverURLs // Try another serverURL.
+			d.receiver.OnError(err)
+			continue // Try another serverURL.
 		}
 		vbm := bucket.VBServerMap()
 		if vbm == nil {
 			bucket.Close()
-			err := d.receiver.OnError(fmt.Errorf("no vbm,"+
+			d.receiver.OnError(fmt.Errorf("no vbm,"+
 				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
 				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
-			if err != nil {
-				return -1
-			}
-			continue serverURLs
+			continue
 		}
 		bucket.Close()
 
