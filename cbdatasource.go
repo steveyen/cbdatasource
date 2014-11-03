@@ -271,7 +271,7 @@ func (d *bucketDataSource) refreshWorkers() {
 			if !exists || workerCh == nil {
 				workerCh = make(chan []uint16)
 				workers[server] = workerCh
-				go d.workerStart(server, workerCh)
+				d.workerStart(server, workerCh)
 			}
 
 			workerCh <- serverVBucketIds
@@ -285,7 +285,7 @@ func (d *bucketDataSource) refreshWorkers() {
 }
 
 // A worker connects to one data manager server.
-func (d *bucketDataSource) workerStart(server string, wantVBucketIdsCh chan []uint16) {
+func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 	backoffFactor := d.options.DataManagerBackoffFactor
 	if backoffFactor <= 0.0 {
 		backoffFactor = DefaultBucketDataSourceOptions.DataManagerBackoffFactor
@@ -300,11 +300,11 @@ func (d *bucketDataSource) workerStart(server string, wantVBucketIdsCh chan []ui
 	}
 
 	go ExponentialBackoffLoop("cbdatasource.worker",
-		func() int { return d.worker(server, wantVBucketIdsCh) },
+		func() int { return d.worker(server, workerCh) },
 		sleepInitMS, backoffFactor, sleepMaxMS)
 }
 
-func (d *bucketDataSource) worker(server string, wantVBucketIdsCh chan []uint16) int {
+func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	client, err := memcached.Connect("tcp", server)
 	if err != nil {
 		d.receiver.OnError(err)
@@ -327,16 +327,16 @@ func (d *bucketDataSource) worker(server string, wantVBucketIdsCh chan []uint16)
 	sendCh := make(chan *gomemcached.MCRequest)
 	recvCh := make(chan *gomemcached.MCResponse)
 
-	done := func(res int) int {
+	cleanup := func(progress int) int {
 		go func() {
 			close(sendCh)
 			for _ = range recvCh {
 			}
 		}()
-		return res
+		return progress
 	}
 
-	go func() {
+	go func() { // Sender goroutine.
 		for msg := range sendCh {
 			err := client.Transmit(msg)
 			if err != nil {
@@ -347,7 +347,7 @@ func (d *bucketDataSource) worker(server string, wantVBucketIdsCh chan []uint16)
 		}
 	}()
 
-	go func() {
+	go func() { // Receiver goroutine.
 		var hdr [gomemcached.HDR_LEN]byte
 		var pkt gomemcached.MCRequest
 
@@ -376,32 +376,53 @@ func (d *bucketDataSource) worker(server string, wantVBucketIdsCh chan []uint16)
 		}
 	}()
 
-	currVBucketIds := map[uint16]bool{}
+	// Values for vbucketId state in currVBucketIds:
+	// "" (dead/closed/unknown), "requested", "running", "closing".
+	currVBucketIds := map[uint16]string{}
 
 loop:
 	for {
 		select {
 		case <-sendErrCh:
-			return done(1) // We saw disconnect; assume we made progress.
+			return cleanup(1) // We saw disconnect; assume we made progress.
 
 		case res, alive := <-recvCh:
 			if !alive {
-				return done(1) // We saw disconnect; assume we made progress.
+				return cleanup(1) // We saw disconnect; assume we made progress.
 			}
 
-			vbucketId := OpaqueVBucketId(res.Opaque)
+			vbucketId := uint16(res.Opaque)
+			vbucketIdState := currVBucketIds[vbucketId]
+
+			fmt.Printf("worker: vbucketId: %d, vbucketIdState: %s, res: %#v",
+				vbucketId, vbucketIdState, res)
+
+			if vbucketIdState == "" {
+				d.receiver.OnError(fmt.Errorf("unknown state, vbucketId: %d, res: %#v",
+					vbucketId, res))
+				return cleanup(1)
+			}
 
 			switch res.Opcode {
 			case gomemcached.UPR_STREAMREQ:
 				status, rollback, flog, err := HandleStreamReq(res)
-				if status == gomemcached.ROLLBACK {
-					continue loop
-				}
 				if status != gomemcached.SUCCESS {
+					delete(currVBucketIds, vbucketId)
+					if status == gomemcached.ROLLBACK {
+						// TODO: tell the receiver, then retry a streamreq.
+						continue loop
+					}
 					// Maybe the vbucket moved, so try a cluster refresh.
 					go func() { d.refreshClusterCh <- "stream-req-error" }()
 					continue loop
 				}
+				if currVBucketIds[vbucketId] != "requested" {
+					d.receiver.OnError(fmt.Errorf("expected vbucket requested state, got: %s",
+						currVBucketIds[vbucketId]))
+					// TODO: tell the receiver, then retry a streamreq.
+					continue loop
+				}
+				currVBucketIds[vbucketId] = "running"
 				// TODO: save the flog in the receiver
 				fmt.Println("stream-req", status, rollback, flog, err)
 				continue loop
@@ -429,14 +450,12 @@ loop:
 				fmt.Println("snpashot", snapStart, snapEnd, snapType)
 
 			default:
-				fmt.Println("unknown opcode")
+				fmt.Println("unknown opcode: %d", res.Opcode)
 			}
 
-			fmt.Printf("%d, %#v", vbucketId, res) // TODO.
-
-		case wantVBucketIdsArr, alive := <-wantVBucketIdsCh:
+		case wantVBucketIdsArr, alive := <-workerCh:
 			if !alive {
-				return done(-1) // We've been asked to shutdown.
+				return cleanup(-1) // We've been asked to shutdown.
 			}
 
 			wantVBucketIds := map[uint16]bool{}
@@ -444,26 +463,40 @@ loop:
 				wantVBucketIds[wantVBucketId] = true
 			}
 
-			for currVBucketId, _ := range currVBucketIds {
-				if _, exists := wantVBucketIds[currVBucketId]; !exists {
-					opaqueMSB := uint16(0x0321)
-					sendCh <- UprCloseStream(currVBucketId, opaqueMSB)
+			for currVBucketId, state := range currVBucketIds {
+				if !wantVBucketIds[currVBucketId] {
+					if state != "" && state != "closing" {
+						currVBucketIds[currVBucketId] = "closing"
+						sendCh <- &gomemcached.MCRequest{
+							Opcode:  gomemcached.UPR_CLOSESTREAM,
+							VBucket: currVBucketId,
+							Opaque:  uint32(currVBucketId),
+						}
+					} // Else, state of "" or "closing", so-no-op.
 				}
 			}
 
-			for wantVBucketID, _ := range wantVBucketIds {
-				if _, exists := currVBucketIds[wantVBucketID]; !exists {
+			for wantVBucketId, _ := range wantVBucketIds {
+				state := currVBucketIds[wantVBucketId]
+				if state == "closing" {
+					d.receiver.OnError(fmt.Errorf("wanting a closing vbucket: %d",
+						wantVBucketId))
+					return cleanup(1)
+				}
+				if state == "" {
+					currVBucketIds[wantVBucketId] = "requested"
+
 					// TODO: Need to get these from the receiver.
-					opaqueMSB := uint16(0x0123)
 					flags := uint32(0)
 					vbucketUUID := uint64(0)
 					seqStart := uint64(0)
 					seqEnd := uint64(0xFFFFFFFFFFFFFFFF)
 					snapStart := uint64(0)
 					snapEnd := uint64(0)
-					sendCh <- UprStreamReq(wantVBucketID, opaqueMSB, flags,
+
+					sendCh <- UprStreamReq(wantVBucketId, flags,
 						vbucketUUID, seqStart, seqEnd, snapStart, snapEnd)
-				}
+				} // Else, state of "requested" or "running", so no-op.
 			}
 		}
 	}
@@ -550,12 +583,12 @@ func UPROpen(mc *memcached.Client, name string, sequence uint32, bufSize uint32)
 	return nil
 }
 
-func UprStreamReq(vbucketId uint16, opaqueMSB uint16, flags uint32,
-	vbucketUUID, seqStart, seqEnd, snapStart, snapEnd uint64) *gomemcached.MCRequest {
+func UprStreamReq(vbucketId uint16, flags uint32, vbucketUUID,
+	seqStart, seqEnd, snapStart, snapEnd uint64) *gomemcached.MCRequest {
 	rq := &gomemcached.MCRequest{
 		Opcode:  gomemcached.UPR_STREAMREQ,
 		VBucket: vbucketId,
-		Opaque:  ComposeOpaque(vbucketId, opaqueMSB),
+		Opaque:  uint32(vbucketId),
 	}
 	rq.Extras = make([]byte, 48)
 	binary.BigEndian.PutUint32(rq.Extras[:4], flags)      // TODO: what flags do we need?
@@ -566,22 +599,6 @@ func UprStreamReq(vbucketId uint16, opaqueMSB uint16, flags uint32,
 	binary.BigEndian.PutUint64(rq.Extras[32:40], snapStart)
 	binary.BigEndian.PutUint64(rq.Extras[40:48], snapEnd)
 	return rq
-}
-
-func UprCloseStream(vbucketId uint16, opaqueMSB uint16) *gomemcached.MCRequest {
-	return &gomemcached.MCRequest{
-		Opcode:  gomemcached.UPR_CLOSESTREAM,
-		VBucket: vbucketId,
-		Opaque:  ComposeOpaque(vbucketId, opaqueMSB),
-	}
-}
-
-func ComposeOpaque(vbucketId, opaqueMSB uint16) uint32 {
-	return (uint32(opaqueMSB) << 16) | uint32(vbucketId)
-}
-
-func OpaqueVBucketId(opaque32 uint32) uint16 {
-	return uint16(opaque32 & 0xFFFF)
 }
 
 func HandleStreamReq(res *gomemcached.MCResponse) (
