@@ -376,6 +376,40 @@ func UPROpen(mc *memcached.Client, name string, sequence uint32, bufSize uint32)
 	return nil
 }
 
+func SendUprStreamReq(mc *memcached.Client, vbucketId uint16,
+	opaqueMSB uint16, flags uint32,
+	vbucketUUID, seqStart, seqEnd, snapStart, snapEnd uint64) error {
+	rq := &gomemcached.MCRequest{
+		Opcode:  gomemcached.UPR_STREAMREQ,
+		VBucket: vbucketId,
+		Opaque:  ComposeOpaque(vbucketId, opaqueMSB),
+	}
+	rq.Extras = make([]byte, 48)
+	binary.BigEndian.PutUint32(rq.Extras[:4], flags)
+	binary.BigEndian.PutUint32(rq.Extras[4:8], uint32(0)) // TODO: what is this?
+	binary.BigEndian.PutUint64(rq.Extras[8:16], seqStart)
+	binary.BigEndian.PutUint64(rq.Extras[16:24], seqEnd)
+	binary.BigEndian.PutUint64(rq.Extras[24:32], vbucketUUID)
+	binary.BigEndian.PutUint64(rq.Extras[32:40], snapStart)
+	binary.BigEndian.PutUint64(rq.Extras[40:48], snapEnd)
+
+	return mc.Transmit(rq)
+}
+
+func SendUprCloseStream(mc *memcached.Client, vbucketId uint16,
+	opaqueMSB uint16) error {
+	rq := &gomemcached.MCRequest{
+		Opcode:  gomemcached.UPR_CLOSESTREAM,
+		VBucket: vbucketId,
+		Opaque:  ComposeOpaque(vbucketId, opaqueMSB),
+	}
+	return mc.Transmit(rq);
+}
+
+func ComposeOpaque(vbucketId, opaqueMSB uint16) uint32 {
+	return (uint32(opaqueMSB) << 16) | uint32(vbucketId)
+}
+
 func (d *bucketDataSource) Stats() BucketDataSourceStats {
 	return BucketDataSourceStats{}
 }
