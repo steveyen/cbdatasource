@@ -325,10 +325,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 	// TODO: Call client.Auth(user, pswd).
 
-	uprOpenName := "UprOpenName" // TODO: What is this?
-	uprOpenSequence := uint32(0) // TODO: What is this?
+	uprOpenName := "cbdatasource" // TODO: need a better UPR_OPEN name.
 
-	err = UPROpen(client, uprOpenName, uprOpenSequence, d.options.FeedBufferSizeBytes)
+	err = UPROpen(client, uprOpenName, d.options.FeedBufferSizeBytes)
 	if err != nil {
 		d.receiver.OnError(err)
 		return 0
@@ -460,8 +459,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 						}
 					} else {
 						// Maybe the vbucket moved, so try a cluster refresh.
-						// TODO: Maybe explicitly look for NOT_MY_VBUCKET status?
-						//
 						go func() { d.refreshClusterCh <- "stream-req-error" }()
 					}
 				} else {
@@ -484,12 +481,24 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			case gomemcached.UPR_STREAMEND:
 				delete(currVBucketIds, vbucketId)
 
+				// We should not normally see a stream-end, unless we
+				// were trying to close.  Maybe the vbucket moved, so
+				// try a cluster refresh.
+				if vbucketIdState != "closing" {
+					go func() { d.refreshClusterCh <- "stream-end" }()
+				}
+
 			case gomemcached.UPR_CLOSESTREAM:
 				delete(currVBucketIds, vbucketId)
 
-			case gomemcached.UPR_CONTROL, gomemcached.UPR_BUFFERACK:
+			case gomemcached.UPR_CONTROL:
 				if res.Status != gomemcached.SUCCESS {
-					return cleanup(1, fmt.Errorf("not success in flow: %#v", res))
+					return cleanup(1, fmt.Errorf("not success control: %#v", res))
+				}
+
+			case gomemcached.UPR_BUFFERACK:
+				if res.Status != gomemcached.SUCCESS {
+					return cleanup(1, fmt.Errorf("not success bufferack: %#v", res))
 				}
 
 			case gomemcached.UPR_NOOP:
@@ -508,9 +517,11 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				panic(fmt.Sprintf("unimplemented flush, res: %#v", res))
 
 			case gomemcached.UPR_OPEN:
+				// Opening was long ago, so we should not see an UPR_OPEN responses.
 				panic(fmt.Sprintf("unexpected open opcode, res: %#v", res))
 
 			case gomemcached.UPR_ADDSTREAM:
+				// This normally comes from ns-server / dcp-migrator.
 				panic(fmt.Sprintf("unexpected addstream opcode, res: %#v", res))
 
 			default:
@@ -519,7 +530,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 			recvBytesTotal +=
 				uint32(gomemcached.HDR_LEN) +
-				uint32(len(res.Key) + len(res.Extras) + len(res.Body))
+					uint32(len(res.Key)+len(res.Extras)+len(res.Body))
 			if ackBytes > 0 && recvBytesTotal > ackBytes {
 				ack := &gomemcached.MCRequest{Opcode: gomemcached.UPR_BUFFERACK}
 				ack.Extras = make([]byte, 4) // TODO: Memory mgmt.
@@ -628,15 +639,15 @@ func getBucket(serverURL, poolName, bucketName, bucketUUID string,
 	return bucket, nil
 }
 
-func UPROpen(mc *memcached.Client, name string, sequence uint32, bufSize uint32) error {
+func UPROpen(mc *memcached.Client, name string, bufSize uint32) error {
 	rq := &gomemcached.MCRequest{
 		Opcode: gomemcached.UPR_OPEN,
 		Key:    []byte(name),
 		Opaque: 0xf00d1234,
 		Extras: make([]byte, 8),
 	}
-	binary.BigEndian.PutUint32(rq.Extras[:4], sequence)
-	flags := uint32(1) // TODO: 0 for consumer, but what does this mean?
+	binary.BigEndian.PutUint32(rq.Extras[:4], 0) // First 4 bytes are reserved.
+	flags := uint32(1)                           // NOTE: 1 for producer, 0 for consumer.
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags)
 
 	if err := mc.Transmit(rq); err != nil {
@@ -677,7 +688,7 @@ func UprStreamReq(vbucketId uint16, flags uint32, vbucketUUID,
 	}
 	rq.Extras = make([]byte, 48)
 	binary.BigEndian.PutUint32(rq.Extras[:4], flags)      // TODO: what flags do we need?
-	binary.BigEndian.PutUint32(rq.Extras[4:8], uint32(0)) // TODO: what is this?
+	binary.BigEndian.PutUint32(rq.Extras[4:8], uint32(0)) // Reserved.
 	binary.BigEndian.PutUint64(rq.Extras[8:16], seqStart)
 	binary.BigEndian.PutUint64(rq.Extras[16:24], seqEnd)
 	binary.BigEndian.PutUint64(rq.Extras[24:32], vbucketUUID)
