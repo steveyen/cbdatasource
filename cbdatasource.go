@@ -94,9 +94,9 @@ type bucketDataSource struct {
 	refreshClusterCh chan string
 	refreshStreamsCh chan string
 
-	m         sync.Mutex
-	isRunning bool
-	vbm       *couchbase.VBucketServerMap
+	m    sync.Mutex
+	life string // "" (unstarted); "running"; "closed".
+	vbm  *couchbase.VBucketServerMap
 }
 
 type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
@@ -132,8 +132,6 @@ func NewBucketDataSource(serverURLs []string,
 
 		refreshClusterCh: make(chan string, 1),
 		refreshStreamsCh: make(chan string, 1),
-
-		isRunning: false,
 	}, nil
 }
 
@@ -141,10 +139,10 @@ func (d *bucketDataSource) Start() error {
 	d.m.Lock()
 	defer d.m.Unlock()
 
-	if d.isRunning {
-		return fmt.Errorf("already running")
+	if d.life != "" {
+		return fmt.Errorf("Start() called in wrong state: %s", d.life)
 	}
-	d.isRunning = true
+	d.life = "running"
 
 	backoffFactor := d.options.ClusterManagerBackoffFactor
 	if backoffFactor <= 0.0 {
@@ -159,9 +157,13 @@ func (d *bucketDataSource) Start() error {
 		sleepMaxMS = DefaultBucketDataSourceOptions.ClusterManagerSleepMaxMS
 	}
 
-	go ExponentialBackoffLoop("bucketDataSource.clusterManagerOnce",
-		func() int { return d.refreshCluster() },
-		sleepInitMS, backoffFactor, sleepMaxMS)
+	go func() {
+		ExponentialBackoffLoop("bucketDataSource.clusterManagerOnce",
+			func() int { return d.refreshCluster() },
+			sleepInitMS, backoffFactor, sleepMaxMS)
+
+		close(d.refreshStreamsCh)
+	}()
 
 	go d.refreshStreams()
 
@@ -196,14 +198,14 @@ func (d *bucketDataSource) refreshCluster() int {
 		}
 
 		_, alive := <-d.refreshClusterCh // Wait for a refresh kick.
-		if !alive {                      // Or, a close to shutdown.
+		if !alive {                      // Or, if it closed then shutdown.
 			return -1
 		}
 
-		return 1 // Restart at the first server.
+		return 1 // We had progress, so restart at the first serverURL.
 	}
 
-	return 0 // Ran through all the servers, so no progress.
+	return 0 // Ran through all the serverURLs, so no progress.
 }
 
 func (d *bucketDataSource) refreshStreams() {
@@ -342,6 +344,13 @@ func (d *bucketDataSource) Stats() BucketDataSourceStats {
 }
 
 func (d *bucketDataSource) Close() error {
+	d.m.Lock()
+	defer d.m.Unlock()
+	if d.life != "running" {
+		return fmt.Errorf("Close() called when not in running state: %s", d.life)
+	}
+	d.life = "closed"
+	close(d.refreshClusterCh)
 	return nil
 }
 
