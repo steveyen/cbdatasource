@@ -31,7 +31,7 @@ type Receiver interface {
 	SetMetaData(vbucketId uint16, v []byte) error
 	OnDocUpdate(vbucketId uint16, k, v []byte) error
 	OnDocDelete(vbucketId uint16, k []byte) error
-	Snapshot(vbucketId uint16) error
+	Snapshot(vbucketId uint16, snapStart, snapEnd uint64, snapType uint32) error
 	Rollback(vbucketId uint16, rollbackSeq uint64) error
 	SaveFailOverLog(vbucketId uint16, flog interface{}) error
 }
@@ -435,6 +435,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					return cleanup(1, err)
 				}
 
+			case gomemcached.UPR_NOOP:
+				sendCh <- &gomemcached.MCRequest{Opcode: gomemcached.UPR_NOOP}
+
 			case gomemcached.UPR_STREAMREQ:
 				delete(currVBucketIds, vbucketId)
 
@@ -462,11 +465,10 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 							return cleanup(1, err)
 						}
 					} else {
-						// Maybe the vbucket moved, so try a cluster refresh.
+						// Maybe the vbucket moved, so kick off a cluster refresh.
 						go func() { d.refreshClusterCh <- "stream-req-error" }()
 					}
-				} else {
-					// SUCCESS case.
+				} else { // SUCCESS case.
 					flog, err := ParseFailoverLog(res.Body[:])
 					if err != nil {
 						return cleanup(1, err)
@@ -487,10 +489,25 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 				// We should not normally see a stream-end, unless we
 				// were trying to close.  Maybe the vbucket moved, so
-				// try a cluster refresh.
+				// kick off a cluster refresh.
 				if vbucketIdState != "closing" {
 					go func() { d.refreshClusterCh <- "stream-end" }()
 				}
+
+			case gomemcached.UPR_SNAPSHOT:
+				if len(res.Extras) < 20 {
+					return cleanup(1, fmt.Errorf("wrong snapshot extras, res: %#v", res))
+				}
+				snapStart := binary.BigEndian.Uint64(res.Extras[0:8])
+				snapEnd := binary.BigEndian.Uint64(res.Extras[8:16])
+				snapType := binary.BigEndian.Uint32(res.Extras[16:20])
+
+				err = d.receiver.Snapshot(vbucketId, snapStart, snapEnd, snapType)
+				if err != nil {
+					return cleanup(1, err)
+				}
+
+				// TODO: Do we need to handle snapAck flag in snapType?
 
 			case gomemcached.UPR_CONTROL:
 				if res.Status != gomemcached.SUCCESS {
@@ -502,23 +519,11 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					return cleanup(1, fmt.Errorf("not success bufferack: %#v", res))
 				}
 
-			case gomemcached.UPR_NOOP:
-				sendCh <- &gomemcached.MCRequest{Opcode: gomemcached.UPR_NOOP}
-
-			case gomemcached.UPR_SNAPSHOT:
-				if len(res.Extras) < 20 {
-					return cleanup(1, fmt.Errorf("wrong snapshot extras, res: %#v", res))
-				}
-				snapStart := binary.BigEndian.Uint64(res.Extras[0:8])
-				snapEnd := binary.BigEndian.Uint64(res.Extras[8:16])
-				snapType := binary.BigEndian.Uint32(res.Extras[16:20])
-				fmt.Println("snapshot", snapStart, snapEnd, snapType)
-
 			case gomemcached.UPR_FLUSH:
 				panic(fmt.Sprintf("unimplemented flush, res: %#v", res))
 
 			case gomemcached.UPR_OPEN:
-				// Opening was long ago, so we should not see an UPR_OPEN responses.
+				// Opening was long ago, so we should not see UPR_OPEN responses.
 				panic(fmt.Sprintf("unexpected upr_open, res: %#v", res))
 
 			case gomemcached.UPR_ADDSTREAM:
@@ -527,7 +532,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 			case gomemcached.UPR_CLOSESTREAM:
 				// Shouldn't see this, as producers (oddly!) respond
-				// with STREAM_END to our CLOSE_STREAM requests.
+				// with a STREAM_END to our CLOSE_STREAM request.
 				panic(fmt.Sprintf("unexpected upr_closestream, res: %#v", res))
 
 			default:
