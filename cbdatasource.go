@@ -92,7 +92,7 @@ type bucketDataSource struct {
 	options    *BucketDataSourceOptions
 
 	refreshClusterCh chan string
-	refreshStreamsCh chan string
+	refreshWorkersCh chan string
 
 	m    sync.Mutex
 	life string // "" (unstarted); "running"; "closed".
@@ -131,7 +131,7 @@ func NewBucketDataSource(serverURLs []string,
 		options:    options,
 
 		refreshClusterCh: make(chan string, 1),
-		refreshStreamsCh: make(chan string, 1),
+		refreshWorkersCh: make(chan string, 1),
 	}, nil
 }
 
@@ -162,10 +162,10 @@ func (d *bucketDataSource) Start() error {
 			func() int { return d.refreshCluster() },
 			sleepInitMS, backoffFactor, sleepMaxMS)
 
-		close(d.refreshStreamsCh)
+		close(d.refreshWorkersCh)
 	}()
 
-	go d.refreshStreams()
+	go d.refreshWorkers()
 
 	return nil
 }
@@ -194,7 +194,7 @@ func (d *bucketDataSource) refreshCluster() int {
 		d.m.Unlock()
 
 		if !vbmSame {
-			d.refreshStreamsCh <- "new-vbm" // Kick the streams to refresh.
+			d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
 		}
 
 		_, alive := <-d.refreshClusterCh // Wait for a refresh kick.
@@ -208,10 +208,10 @@ func (d *bucketDataSource) refreshCluster() int {
 	return 0 // Ran through all the serverURLs, so no progress.
 }
 
-func (d *bucketDataSource) refreshStreams() {
-	workers := make(map[string]chan []uint16)
+func (d *bucketDataSource) refreshWorkers() {
+	workers := make(map[string]chan []uint16) // Keyed by server.
 
-	for _ = range d.refreshStreamsCh {
+	for _ = range d.refreshWorkersCh {
 		d.m.Lock()
 		vbm := d.vbm
 		d.m.Unlock()
@@ -221,25 +221,25 @@ func (d *bucketDataSource) refreshStreams() {
 
 		for _, vbucketId := range d.vbucketIds {
 			if int(vbucketId) >= len(vbm.VBucketMap) {
-				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
 					" saw bad vbucketId: %d", vbucketId))
 				continue
 			}
 			serverIdxs := vbm.VBucketMap[vbucketId]
 			if serverIdxs == nil || len(serverIdxs) < 1 {
-				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
 					" no serverIdxs for vbucketId: %d", vbucketId))
 				continue
 			}
 			masterIdx := serverIdxs[0]
 			if int(masterIdx) >= len(vbm.ServerList) {
-				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
 					" no masterIdx for vbucketId: %d", vbucketId))
 				continue
 			}
 			masterServer := vbm.ServerList[masterIdx]
 			if masterServer == "" {
-				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
 					" no masterServer for vbucketId: %d", vbucketId))
 				continue
 			}
@@ -279,6 +279,7 @@ func (d *bucketDataSource) refreshStreams() {
 	}
 }
 
+// A worker connects to one data manager server.
 func (d *bucketDataSource) workerStart(server string, newVBucketIdsCh chan []uint16) {
 	backoffFactor := d.options.DataManagerBackoffFactor
 	if backoffFactor <= 0.0 {
@@ -335,7 +336,9 @@ func (d *bucketDataSource) worker(server string, newVBucketIdsCh chan []uint16) 
 		// TODO: start stream and manage it.
 	}
 
-	return 0
+	feed.Close()
+	client.Close()
+	return -1
 }
 
 func (d *bucketDataSource) Stats() BucketDataSourceStats {
