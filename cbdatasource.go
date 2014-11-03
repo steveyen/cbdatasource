@@ -310,24 +310,16 @@ func (d *bucketDataSource) worker(server string, newVBucketIdsCh chan []uint16) 
 		d.receiver.OnError(err)
 		return 0
 	}
+	defer client.Close()
 
-	// Call client.Auth(user, pswd).
-
-	feed, err := client.NewUprFeed()
-	if err != nil {
-		client.Close()
-		d.receiver.OnError(err)
-		return 0
-	}
+	// TODO: Call client.Auth(user, pswd).
 
 	uprOpenName := "UprOpenName" // TODO: What is this?
 	uprOpenSequence := uint32(0) // TODO: What is this?
 
-	err = feed.UprOpen(uprOpenName, uprOpenSequence,
-		d.options.FeedBufferSizeBytes)
+	err = UPROpen(client, uprOpenName, uprOpenSequence, d.options.FeedBufferSizeBytes)
 	if err != nil {
-		feed.Close()
-		client.Close()
+		d.receiver.OnError(err)
 		return 0
 	}
 
@@ -341,9 +333,7 @@ func (d *bucketDataSource) worker(server string, newVBucketIdsCh chan []uint16) 
 		// TODO: start stream and manage it.
 	}
 
-	feed.Close()
-	client.Close()
-	return -1
+	return -1 // We reach here when asked to shutdown.
 }
 
 func UPROpen(mc *memcached.Client, name string, sequence uint32, bufSize uint32) error {
@@ -367,7 +357,7 @@ func UPROpen(mc *memcached.Client, name string, sequence uint32, bufSize uint32)
 	if res.Opcode != gomemcached.UPR_OPEN {
 		return fmt.Errorf("UPROpen unexpected #opcode %v", res.Opcode)
 	}
-	if rq.Opaque != res.Opaque {
+	if res.Opaque != rq.Opaque {
 		return fmt.Errorf("UPROpen opaque mismatch, %v over %v", res.Opaque, res.Opaque)
 	}
 	if res.Status != gomemcached.SUCCESS {
