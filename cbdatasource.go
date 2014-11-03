@@ -222,22 +222,26 @@ func (d *bucketDataSource) refreshStreams() {
 
 		for _, vbucketId := range d.vbucketIds {
 			if int(vbucketId) >= len(vbm.VBucketMap) {
-				// TODO: Report bad vbucketId.
+				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+					" saw bad vbucketId: %d", vbucketId))
 				continue
 			}
 			serverIdxs := vbm.VBucketMap[vbucketId]
 			if serverIdxs == nil || len(serverIdxs) < 1 {
-				// TODO: Report no serverIdxs for vbucketId.
+				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+					" no serverIdxs for vbucketId: %d", vbucketId))
 				continue
 			}
 			masterIdx := serverIdxs[0]
 			if int(masterIdx) >= len(vbm.ServerList) {
-				// TODO: Report bad masterIdx.
+				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+					" no masterIdx for vbucketId: %d", vbucketId))
 				continue
 			}
 			masterServer := vbm.ServerList[masterIdx]
 			if masterServer == "" {
-				// TODO: Report bad masterServer.
+				d.receiver.OnError(fmt.Errorf("refreshStreams"+
+					" no masterServer for vbucketId: %d", vbucketId))
 				continue
 			}
 			v, exists := vbucketIdsByServer[masterServer]
@@ -261,7 +265,7 @@ func (d *bucketDataSource) refreshStreams() {
 			workerCh <- serverVBucketIds
 		}
 
-		// Close any extraneous works.
+		// Close any extraneous workers.
 		for server, workerCh := range workers {
 			if _, exists := vbucketIdsByServer[server]; !exists {
 				delete(workers, server)
