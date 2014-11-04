@@ -802,9 +802,15 @@ func (d *bucketDataSource) Close() error {
 	d.life = "closed"
 	d.m.Unlock()
 
+	// Closing refreshClusterCh's goroutine closes refreshWorkersCh's
+	// goroutine, which closes every workerCh and then finally closes
+	// the closedCh.
 	close(d.refreshClusterCh)
 
 	<-d.closedCh
+
+	// NOTE: By this point, worker goroutines might still be going,
+	// but should end soon.
 
 	return nil
 }
