@@ -117,19 +117,52 @@ func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
 
 // Implements ReadWriteCloser interface for fake networking.
 type TestRWC struct {
-	name string
+	name    string
+	readCh  chan RWReq
+	writeCh chan RWReq
 }
 
 func (c *TestRWC) Read(p []byte) (n int, err error) {
+	if c.readCh != nil {
+		resCh := make(chan RWRes)
+		c.readCh <- RWReq{op: "read", buf: p, resCh: resCh}
+		res := <- resCh
+		return res.n, res.err
+	}
 	return 0, fmt.Errorf("fake-read-err")
 }
 
 func (c *TestRWC) Write(p []byte) (n int, err error) {
+	if c.writeCh != nil {
+		resCh := make(chan RWRes)
+		c.writeCh <- RWReq{op: "write", buf: p, resCh: resCh}
+		res := <- resCh
+		return res.n, res.err
+	}
 	return 0, fmt.Errorf("fake-write-err")
 }
 
 func (c *TestRWC) Close() error {
+	if c.readCh != nil {
+		close(c.readCh)
+		c.readCh = nil
+	}
+	if c.writeCh != nil {
+		close(c.writeCh)
+		c.writeCh = nil
+	}
 	return nil
+}
+
+type RWReq struct {
+	op  string
+	buf []byte
+	resCh chan RWRes
+}
+
+type RWRes struct {
+	n   int
+	err error
 }
 
 // ------------------------------------------------------
