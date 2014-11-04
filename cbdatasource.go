@@ -174,6 +174,8 @@ type bucketDataSource struct {
 	refreshClusterCh chan string
 	refreshWorkersCh chan string
 
+	stats BucketDataSourceStats
+
 	m        sync.Mutex // Protects all the below fields.
 	life     string     // Valid life states: "" (unstarted); "running"; "closed".
 	vbm      *couchbase.VBucketServerMap
