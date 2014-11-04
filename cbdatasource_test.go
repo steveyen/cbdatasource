@@ -117,12 +117,15 @@ func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
 
 // Implements ReadWriteCloser interface for fake networking.
 type TestRWC struct {
-	name    string
-	readCh  chan RWReq
-	writeCh chan RWReq
+	name      string
+	numReads  int
+	numWrites int
+	readCh    chan RWReq
+	writeCh   chan RWReq
 }
 
 func (c *TestRWC) Read(p []byte) (n int, err error) {
+	c.numReads += 1
 	if c.readCh != nil {
 		resCh := make(chan RWRes)
 		c.readCh <- RWReq{op: "read", buf: p, resCh: resCh}
@@ -133,6 +136,7 @@ func (c *TestRWC) Read(p []byte) (n int, err error) {
 }
 
 func (c *TestRWC) Write(p []byte) (n int, err error) {
+	c.numWrites += 1
 	if c.writeCh != nil {
 		resCh := make(chan RWRes)
 		c.writeCh <- RWReq{op: "write", buf: p, resCh: resCh}
@@ -328,8 +332,84 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 }
 
 func TestConnectError(t *testing.T) {
+	var connectBucketResult Bucket
+	var connectBucketErr error
+	var connectBucketCh chan []string
+	var connectCh chan []string
+
+	connectBucket := func(serverURL, poolName,
+		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+		return connectBucketResult, connectBucketErr
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		connectCh <- []string{protocol, dest}
+		return nil, fmt.Errorf("fake-connect-error, protocol: %s, dest: %s",
+			protocol, dest)
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16{0, 1, 2, 3}
+	var authFunc AuthFunc
+	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	connectBucketResult = &TestBucket{
+		uuid: bucketUUID,
+		vbsm: &couchbase.VBucketServerMap{
+			ServerList: []string{"serverA"},
+			VBucketMap: [][]int{
+				[]int{0},
+				[]int{0},
+				[]int{0},
+				[]int{0},
+			},
+		},
+	}
+	connectBucketErr = nil
+	connectBucketCh = make(chan []string)
+	connectCh = make(chan []string)
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no-err on Start()")
+	}
+	c := <-connectBucketCh
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+		t.Errorf("expected connectBucket params, got: %#v", c)
+	}
+	c = <-connectCh
+	if !reflect.DeepEqual(c, []string{"tcp", "serverA"}) {
+		t.Errorf("expected connect params, got: %#v", c)
+	}
+	err = bds.Close()
+	if err != nil {
+		t.Errorf("expected clean Close(), got err: %v", err)
+	}
+	if len(receiver.errs) != 1 {
+		t.Errorf("expected connect err")
+	}
+}
+
+func TestReadError(t *testing.T) {
+	var lastRWC *TestRWC
+
 	newFakeConn := func(dest string) io.ReadWriteCloser {
-		return &TestRWC{name: dest}
+		lastRWC = &TestRWC{name: dest}
+		return lastRWC
 	}
 
 	var connectBucketResult Bucket
@@ -401,77 +481,13 @@ func TestConnectError(t *testing.T) {
 	if len(receiver.errs) != 1 {
 		t.Errorf("expected connect err")
 	}
-}
-
-func TestReadError(t *testing.T) {
-	var connectBucketResult Bucket
-	var connectBucketErr error
-	var connectBucketCh chan []string
-	var connectCh chan []string
-
-	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
-		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
-		return connectBucketResult, connectBucketErr
+	if lastRWC == nil {
+		t.Errorf("expected a lastRWC")
 	}
-
-	connect := func(protocol, dest string) (*memcached.Client, error) {
-		if protocol != "tcp" || dest != "serverA" {
-			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
-		}
-		connectCh <- []string{protocol, dest}
-		return nil, fmt.Errorf("fake-connect-error, protocol: %s, dest: %s",
-			protocol, dest)
+	if lastRWC.numReads != 0 {
+		t.Errorf("expected a lastRWC with 0 reads, %#v", lastRWC)
 	}
-
-	serverURLs := []string{"serverA"}
-	bucketUUID := ""
-	vbucketIds := []uint16{0, 1, 2, 3}
-	var authFunc AuthFunc
-	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
-	options := &BucketDataSourceOptions{
-		ConnectBucket: connectBucket,
-		Connect:       connect,
-	}
-
-	connectBucketResult = &TestBucket{
-		uuid: bucketUUID,
-		vbsm: &couchbase.VBucketServerMap{
-			ServerList: []string{"serverA"},
-			VBucketMap: [][]int{
-				[]int{0},
-				[]int{0},
-				[]int{0},
-				[]int{0},
-			},
-		},
-	}
-	connectBucketErr = nil
-	connectBucketCh = make(chan []string)
-	connectCh = make(chan []string)
-
-	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
-	if err != nil || bds == nil {
-		t.Errorf("expected no err, got err: %v", err)
-	}
-	err = bds.Start()
-	if err != nil {
-		t.Errorf("expected no-err on Start()")
-	}
-	c := <-connectBucketCh
-	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
-		t.Errorf("expected connectBucket params, got: %#v", c)
-	}
-	c = <-connectCh
-	if !reflect.DeepEqual(c, []string{"tcp", "serverA"}) {
-		t.Errorf("expected connect params, got: %#v", c)
-	}
-	err = bds.Close()
-	if err != nil {
-		t.Errorf("expected clean Close(), got err: %v", err)
-	}
-	if len(receiver.errs) != 1 {
-		t.Errorf("expected connect err")
+	if lastRWC.numWrites != 1 {
+		t.Errorf("expected a lastRWC with 1 write, %#v", lastRWC)
 	}
 }
