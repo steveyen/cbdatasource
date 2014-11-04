@@ -15,6 +15,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"reflect"
 	"strconv"
 	"sync"
@@ -366,7 +367,10 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 	// TODO: Call client.Auth(user, pswd).
 
-	uprOpenName := "cbdatasource" // TODO: need a better UPR_OPEN name.
+	uprOpenName := d.options.Name
+	if uprOpenName == "" {
+		uprOpenName = fmt.Sprintf("cbdatasource-%x", rand.Int63())
+	}
 
 	err = UPROpen(client, uprOpenName, d.options.FeedBufferSizeBytes)
 	if err != nil {
