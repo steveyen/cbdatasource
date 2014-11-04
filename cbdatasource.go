@@ -302,6 +302,10 @@ func (d *bucketDataSource) refreshCluster() int {
 			return -1
 		}
 
+		if !d.isRunning() {
+			return -1
+		}
+
 		return 1 // We had progress, so restart at the first serverURL.
 	}
 
