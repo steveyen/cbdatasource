@@ -21,6 +21,9 @@ import (
 	"github.com/steveyen/cbdatasource"
 )
 
+// Simple, memory-only sample program that uses the cbdatasource API's
+// to get data from a couchbase cluster using DCP.
+
 var serverURL = flag.String("serverURL", "http://localhost:8091",
 	"couchbase server URL")
 var poolName = flag.String("poolName", "default",
@@ -32,19 +35,21 @@ var bucketUUID = flag.String("bucketUUID", "",
 
 func main() {
 	serverURLs := []string{*serverURL}
-	vbucketIds := []uint16(nil)
+	vbucketIds := []uint16(nil) // A nil means get all the vbuckets.
+
 	var authFunc cbdatasource.AuthFunc
 	var options *cbdatasource.BucketDataSourceOptions
+
 	receiver := &ExampleReceiver{}
 
-	b, err := cbdatasource.NewBucketDataSource(serverURLs, *poolName, *bucketName, *bucketUUID,
+	b, err := cbdatasource.NewBucketDataSource(serverURLs,
+		*poolName, *bucketName, *bucketUUID,
 		vbucketIds, authFunc, receiver, options)
 	if err != nil {
 		log.Fatalf(fmt.Sprintf("error: NewBucketDataSource, err: %v", err))
 	}
 
-	err = b.Start()
-	if err != nil {
+	if err = b.Start(); err != nil {
 		log.Fatalf(fmt.Sprintf("error: Start, err: %v", err))
 	}
 
@@ -88,7 +93,7 @@ func (r *ExampleReceiver) updateSeq(vbucketId uint16, seq uint64) {
 		r.seqs = make(map[uint16]uint64)
 	}
 	if r.seqs[vbucketId] < seq {
-		r.seqs[vbucketId] = seq
+		r.seqs[vbucketId] = seq // Remember the max seq for GetMetaData().
 	}
 }
 
@@ -113,7 +118,8 @@ func (r *ExampleReceiver) SetMetaData(vbucketId uint16, value []byte) error {
 	return nil
 }
 
-func (r *ExampleReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error) {
+func (r *ExampleReceiver) GetMetaData(vbucketId uint16) (
+	value []byte, lastSeq uint64, err error) {
 	log.Printf("get-metadata: vbucketId: %d", vbucketId)
 
 	r.m.Lock()
