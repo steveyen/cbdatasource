@@ -474,174 +474,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				return cleanup(1, nil) // We saw disconnect; assume we made progress.
 			}
 
-			switch res.Opcode {
-			case gomemcached.UPR_MUTATION,
-				gomemcached.UPR_DELETION,
-				gomemcached.UPR_EXPIRATION:
-				vbucketId := uint16(res.Status)
-				vbucketIdState := currVBucketIds[vbucketId]
-
-				if vbucketIdState != "running" {
-					return cleanup(0, fmt.Errorf("worker non-running,"+
-						" vbucketId: %d, vbucketIdState: %s, res: %#v",
-						vbucketId, vbucketIdState, res))
-				}
-
-				seq := binary.BigEndian.Uint64(res.Extras[:8])
-				if res.Opcode == gomemcached.UPR_MUTATION {
-					err = d.receiver.DataUpdate(vbucketId, res.Key, seq, res)
-				} else {
-					err = d.receiver.DataDelete(vbucketId, res.Key, seq, res)
-				}
-				if err != nil {
-					return cleanup(0, err)
-				}
-
-			case gomemcached.UPR_NOOP:
-				sendCh <- &gomemcached.MCRequest{
-					Opcode: gomemcached.UPR_NOOP,
-					Opaque: res.Opaque,
-				}
-
-			case gomemcached.UPR_STREAMREQ:
-				vbucketId := uint16(res.Opaque)
-				vbucketIdState := currVBucketIds[vbucketId]
-
-				delete(currVBucketIds, vbucketId)
-
-				if vbucketIdState != "requested" {
-					return cleanup(0, fmt.Errorf("streamreq non-requested,"+
-						" vbucketId: %d, vbucketIdState: %s, res: %#v",
-						vbucketId, vbucketIdState, res))
-				}
-
-				if res.Status != gomemcached.SUCCESS {
-					if res.Status == gomemcached.ROLLBACK {
-						if len(res.Extras) != 8 {
-							return cleanup(0, fmt.Errorf("bad rollback extras: %#v",
-								res))
-						}
-
-						rollbackSeq := binary.BigEndian.Uint64(res.Extras)
-						err := d.receiver.Rollback(vbucketId, rollbackSeq)
-						if err != nil {
-							return cleanup(0, err)
-						}
-
-						currVBucketIds[vbucketId] = "requested"
-						err = d.sendStreamReq(sendCh, vbucketId)
-						if err != nil {
-							return cleanup(0, err)
-						}
-					} else {
-						// Maybe the vbucket moved, so kick off a cluster refresh.
-						go func() { d.refreshClusterCh <- "stream-req-error" }()
-					}
-				} else { // SUCCESS case.
-					flog, err := ParseFailOverLog(res.Body[:])
-					if err != nil {
-						return cleanup(0, err)
-					}
-					v, _, err := d.getVBucketMetaData(vbucketId)
-					if err != nil {
-						return cleanup(0, err)
-					}
-
-					v.FailOverLog = flog
-
-					err = d.setVBucketMetaData(vbucketId, v)
-					if err != nil {
-						return cleanup(0, err)
-					}
-
-					currVBucketIds[vbucketId] = "running"
-				}
-
-			case gomemcached.UPR_STREAMEND:
-				vbucketId := uint16(res.Status)
-				vbucketIdState := currVBucketIds[vbucketId]
-
-				delete(currVBucketIds, vbucketId)
-
-				if vbucketIdState != "running" &&
-					vbucketIdState != "closing" {
-					return cleanup(0, fmt.Errorf("stream-end bad state,"+
-						" vbucketId: %d, vbucketIdState: %s, res: %#v",
-						vbucketId, vbucketIdState, res))
-				}
-
-				// We should not normally see a stream-end, unless we
-				// were trying to close.  Maybe the vbucket moved, so
-				// kick off a cluster refresh.
-				if vbucketIdState != "closing" {
-					go func() { d.refreshClusterCh <- "stream-end" }()
-				}
-
-			case gomemcached.UPR_SNAPSHOT:
-				vbucketId := uint16(res.Status)
-				vbucketIdState := currVBucketIds[vbucketId]
-
-				if vbucketIdState != "running" {
-					return cleanup(0, fmt.Errorf("snapshot non-running,"+
-						" vbucketId: %d, vbucketIdState: %s, res: %#v",
-						vbucketId, vbucketIdState, res))
-				}
-
-				if len(res.Extras) < 20 {
-					return cleanup(0, fmt.Errorf("bad snapshot extras, res: %#v", res))
-				}
-
-				v, _, err := d.getVBucketMetaData(vbucketId)
-				if err != nil {
-					return cleanup(0, err)
-				}
-
-				v.SnapStart = binary.BigEndian.Uint64(res.Extras[0:8])
-				v.SnapEnd = binary.BigEndian.Uint64(res.Extras[8:16])
-
-				err = d.setVBucketMetaData(vbucketId, v)
-				if err != nil {
-					return cleanup(0, err)
-				}
-
-				snapType := binary.BigEndian.Uint32(res.Extras[16:20])
-
-				err = d.receiver.SnapshotStart(vbucketId,
-					v.SnapStart, v.SnapEnd, snapType)
-				if err != nil {
-					return cleanup(0, err)
-				}
-
-				// TODO: Do we need to handle snapAck flag in snapType?
-
-			case gomemcached.UPR_CONTROL:
-				if res.Status != gomemcached.SUCCESS {
-					return cleanup(0, fmt.Errorf("failed control: %#v", res))
-				}
-
-			case gomemcached.UPR_BUFFERACK:
-				if res.Status != gomemcached.SUCCESS {
-					return cleanup(0, fmt.Errorf("failed bufferack: %#v", res))
-				}
-
-			case gomemcached.UPR_FLUSH:
-				panic(fmt.Sprintf("unimplemented flush, res: %#v", res))
-
-			case gomemcached.UPR_OPEN:
-				// Opening was long ago, so we should not see UPR_OPEN responses.
-				panic(fmt.Sprintf("unexpected upr_open, res: %#v", res))
-
-			case gomemcached.UPR_ADDSTREAM:
-				// This normally comes from ns-server / dcp-migrator.
-				panic(fmt.Sprintf("unexpected upr_addstream, res: %#v", res))
-
-			case gomemcached.UPR_CLOSESTREAM:
-				// Shouldn't see this, as producers (oddly!) respond
-				// with a STREAM_END to our CLOSE_STREAM request.
-				panic(fmt.Sprintf("unexpected upr_closestream, res: %#v", res))
-
-			default:
-				panic(fmt.Sprintf("unknown opcode, res: %#v", res))
+			progress, err := d.handleRecv(sendCh, currVBucketIds, res)
+			if err != nil {
+				return cleanup(progress, err)
 			}
 
 			recvBytesTotal +=
@@ -696,6 +531,181 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}
 
 	return cleanup(-1, nil) // Unreached.
+}
+
+func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
+	currVBucketIds map[uint16]string, res *gomemcached.MCResponse) (
+	progress int, err error) {
+	switch res.Opcode {
+	case gomemcached.UPR_MUTATION,
+		gomemcached.UPR_DELETION,
+		gomemcached.UPR_EXPIRATION:
+		vbucketId := uint16(res.Status)
+		vbucketIdState := currVBucketIds[vbucketId]
+
+		if vbucketIdState != "running" {
+			return 0, fmt.Errorf("worker non-running,"+
+				" vbucketId: %d, vbucketIdState: %s, res: %#v",
+				vbucketId, vbucketIdState, res)
+		}
+
+		seq := binary.BigEndian.Uint64(res.Extras[:8])
+		if res.Opcode == gomemcached.UPR_MUTATION {
+			err = d.receiver.DataUpdate(vbucketId, res.Key, seq, res)
+		} else {
+			err = d.receiver.DataDelete(vbucketId, res.Key, seq, res)
+		}
+		if err != nil {
+			return 0, err
+		}
+
+	case gomemcached.UPR_NOOP:
+		sendCh <- &gomemcached.MCRequest{
+			Opcode: gomemcached.UPR_NOOP,
+			Opaque: res.Opaque,
+		}
+
+	case gomemcached.UPR_STREAMREQ:
+		vbucketId := uint16(res.Opaque)
+		vbucketIdState := currVBucketIds[vbucketId]
+
+		delete(currVBucketIds, vbucketId)
+
+		if vbucketIdState != "requested" {
+			return 0, fmt.Errorf("streamreq non-requested,"+
+				" vbucketId: %d, vbucketIdState: %s, res: %#v",
+				vbucketId, vbucketIdState, res)
+		}
+
+		if res.Status != gomemcached.SUCCESS {
+			if res.Status == gomemcached.ROLLBACK {
+				if len(res.Extras) != 8 {
+					return 0, fmt.Errorf("bad rollback extras: %#v", res)
+				}
+
+				rollbackSeq := binary.BigEndian.Uint64(res.Extras)
+				err := d.receiver.Rollback(vbucketId, rollbackSeq)
+				if err != nil {
+					return 0, err
+				}
+
+				currVBucketIds[vbucketId] = "requested"
+				err = d.sendStreamReq(sendCh, vbucketId)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+				// Maybe the vbucket moved, so kick off a cluster refresh.
+				go func() { d.refreshClusterCh <- "stream-req-error" }()
+			}
+		} else { // SUCCESS case.
+			flog, err := ParseFailOverLog(res.Body[:])
+			if err != nil {
+				return 0, err
+			}
+			v, _, err := d.getVBucketMetaData(vbucketId)
+			if err != nil {
+				return 0, err
+			}
+
+			v.FailOverLog = flog
+
+			err = d.setVBucketMetaData(vbucketId, v)
+			if err != nil {
+				return 0, err
+			}
+
+			currVBucketIds[vbucketId] = "running"
+		}
+
+	case gomemcached.UPR_STREAMEND:
+		vbucketId := uint16(res.Status)
+		vbucketIdState := currVBucketIds[vbucketId]
+
+		delete(currVBucketIds, vbucketId)
+
+		if vbucketIdState != "running" &&
+			vbucketIdState != "closing" {
+			return 0, fmt.Errorf("stream-end bad state,"+
+				" vbucketId: %d, vbucketIdState: %s, res: %#v",
+				vbucketId, vbucketIdState, res)
+		}
+
+		// We should not normally see a stream-end, unless we
+		// were trying to close.  Maybe the vbucket moved, so
+		// kick off a cluster refresh.
+		if vbucketIdState != "closing" {
+			go func() { d.refreshClusterCh <- "stream-end" }()
+		}
+
+	case gomemcached.UPR_SNAPSHOT:
+		vbucketId := uint16(res.Status)
+		vbucketIdState := currVBucketIds[vbucketId]
+
+		if vbucketIdState != "running" {
+			return 0, fmt.Errorf("snapshot non-running,"+
+				" vbucketId: %d, vbucketIdState: %s, res: %#v",
+				vbucketId, vbucketIdState, res)
+		}
+
+		if len(res.Extras) < 20 {
+			return 0, fmt.Errorf("bad snapshot extras, res: %#v", res)
+		}
+
+		v, _, err := d.getVBucketMetaData(vbucketId)
+		if err != nil {
+			return 0, err
+		}
+
+		v.SnapStart = binary.BigEndian.Uint64(res.Extras[0:8])
+		v.SnapEnd = binary.BigEndian.Uint64(res.Extras[8:16])
+
+		err = d.setVBucketMetaData(vbucketId, v)
+		if err != nil {
+			return 0, err
+		}
+
+		snapType := binary.BigEndian.Uint32(res.Extras[16:20])
+
+		err = d.receiver.SnapshotStart(vbucketId,
+			v.SnapStart, v.SnapEnd, snapType)
+		if err != nil {
+			return 0, err
+		}
+
+		// TODO: Do we need to handle snapAck flag in snapType?
+
+	case gomemcached.UPR_CONTROL:
+		if res.Status != gomemcached.SUCCESS {
+			return 0, fmt.Errorf("failed control: %#v", res)
+		}
+
+	case gomemcached.UPR_BUFFERACK:
+		if res.Status != gomemcached.SUCCESS {
+			return 0, fmt.Errorf("failed bufferack: %#v", res)
+		}
+
+	case gomemcached.UPR_FLUSH:
+		panic(fmt.Sprintf("unimplemented flush, res: %#v", res))
+
+	case gomemcached.UPR_OPEN:
+		// Opening was long ago, so we should not see UPR_OPEN responses.
+		panic(fmt.Sprintf("unexpected upr_open, res: %#v", res))
+
+	case gomemcached.UPR_ADDSTREAM:
+		// This normally comes from ns-server / dcp-migrator.
+		panic(fmt.Sprintf("unexpected upr_addstream, res: %#v", res))
+
+	case gomemcached.UPR_CLOSESTREAM:
+		// Shouldn't see this, as producers (oddly!) respond
+		// with a STREAM_END to our CLOSE_STREAM request.
+		panic(fmt.Sprintf("unexpected upr_closestream, res: %#v", res))
+
+	default:
+		panic(fmt.Sprintf("unknown opcode, res: %#v", res))
+	}
+
+	return 1, nil
 }
 
 func (d *bucketDataSource) getVBucketMetaData(vbucketId uint16) (
