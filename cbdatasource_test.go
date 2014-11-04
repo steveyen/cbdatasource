@@ -13,8 +13,8 @@ package cbdatasource
 
 import (
 	"fmt"
+	"io"
 	"reflect"
-	"runtime"
 	"testing"
 
 	"github.com/couchbase/gomemcached"
@@ -114,6 +114,25 @@ func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint
 func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
 	return fmt.Errorf("bad-rollback")
 }
+
+// Implements ReadWriteCloser interface for fake networking.
+type TestRWC struct {
+	name string
+}
+
+func (c *TestRWC) Read(p []byte) (n int, err error) {
+	return 0, fmt.Errorf("fake-read-err")
+}
+
+func (c *TestRWC) Write(p []byte) (n int, err error) {
+	return 0, fmt.Errorf("fake-write-err")
+}
+
+func (c *TestRWC) Close() error {
+	return nil
+}
+
+// ------------------------------------------------------
 
 func TestNewBucketDataSource(t *testing.T) {
 	serverURLs := []string(nil)
@@ -261,7 +280,6 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
 		t.Errorf("expected connectBucket params")
 	}
-	runtime.Gosched()
 	select {
 	case c := <-connectCh:
 		t.Errorf("expected no connect due to nil vbsm, got: %#v", c)
@@ -276,7 +294,83 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	}
 }
 
-func TestBucketDataSourceStartVBSM(t *testing.T) {
+func TestConnectError(t *testing.T) {
+	newFakeConn := func(dest string) io.ReadWriteCloser {
+		return &TestRWC{name: dest}
+	}
+
+	var connectBucketResult Bucket
+	var connectBucketErr error
+	var connectBucketCh chan []string
+	var connectCh chan []string
+
+	connectBucket := func(serverURL, poolName,
+		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+		return connectBucketResult, connectBucketErr
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		connectCh <- []string{protocol, dest}
+		return memcached.Wrap(newFakeConn(dest))
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16{0, 1, 2, 3}
+	var authFunc AuthFunc
+	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	connectBucketResult = &TestBucket{
+		uuid: bucketUUID,
+		vbsm: &couchbase.VBucketServerMap{
+			ServerList: []string{"serverA"},
+			VBucketMap: [][]int{
+				[]int{0},
+				[]int{0},
+				[]int{0},
+				[]int{0},
+			},
+		},
+	}
+	connectBucketErr = nil
+	connectBucketCh = make(chan []string)
+	connectCh = make(chan []string)
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no-err on Start()")
+	}
+	c := <-connectBucketCh
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+		t.Errorf("expected connectBucket params, got: %#v", c)
+	}
+	c = <-connectCh
+	if !reflect.DeepEqual(c, []string{"tcp", "serverA"}) {
+		t.Errorf("expected connect params, got: %#v", c)
+	}
+	err = bds.Close()
+	if err != nil {
+		t.Errorf("expected clean Close(), got err: %v", err)
+	}
+	if len(receiver.errs) != 1 {
+		t.Errorf("expected connect err")
+	}
+}
+
+func TestReadError(t *testing.T) {
 	var connectBucketResult Bucket
 	var connectBucketErr error
 	var connectBucketCh chan []string
