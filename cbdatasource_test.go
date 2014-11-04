@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
 
 	"github.com/couchbase/gomemcached"
@@ -51,6 +52,7 @@ type TestMutation struct {
 }
 
 type TestReceiver struct {
+	m    sync.Mutex
 	errs []error
 	muts []*TestMutation
 	meta map[uint16][]byte
@@ -64,12 +66,18 @@ type TestReceiver struct {
 }
 
 func (r *TestReceiver) OnError(err error) {
+	r.m.Lock()
+	defer r.m.Unlock()
+
 	// fmt.Printf("  testName: %s: %v\n", r.testName, err)
 	r.errs = append(r.errs, err)
 }
 
 func (r *TestReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
 	res *gomemcached.MCResponse) error {
+	r.m.Lock()
+	defer r.m.Unlock()
+
 	r.muts = append(r.muts, &TestMutation{
 		delete:    false,
 		vbucketId: vbucketId,
@@ -82,6 +90,9 @@ func (r *TestReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
 
 func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
 	res *gomemcached.MCResponse) error {
+	r.m.Lock()
+	defer r.m.Unlock()
+
 	r.muts = append(r.muts, &TestMutation{
 		delete:    true,
 		vbucketId: vbucketId,
@@ -99,6 +110,9 @@ func (r *TestReceiver) SnapshotStart(vbucketId uint16,
 }
 
 func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
+	r.m.Lock()
+	defer r.m.Unlock()
+
 	r.numSetMetaDatas += 1
 	if r.meta == nil {
 		r.meta = make(map[uint16][]byte)
@@ -108,6 +122,9 @@ func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
 }
 
 func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error) {
+	r.m.Lock()
+	defer r.m.Unlock()
+
 	r.numGetMetaDatas += 1
 	rv := []byte(nil)
 	if r.meta != nil {
@@ -158,8 +175,6 @@ func (c *TestRWC) Write(p []byte) (n int, err error) {
 }
 
 func (c *TestRWC) Close() error {
-	c.readCh = nil
-	c.writeCh = nil
 	return nil
 }
 
@@ -404,15 +419,23 @@ func TestConnectError(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected clean Close(), got err: %v", err)
 	}
+
+	receiver.m.Lock()
+	defer receiver.m.Unlock()
+
 	if len(receiver.errs) != 1 {
 		t.Errorf("expected connect err")
 	}
 }
 
 func TestConnThatAlwaysErrors(t *testing.T) {
-	var lastRWC *TestRWC
+	var lastRWCM sync.Mutex
+	var lastRWC  *TestRWC
 
 	newFakeConn := func(dest string) io.ReadWriteCloser {
+		lastRWCM.Lock()
+		defer lastRWCM.Unlock()
+
 		lastRWC = &TestRWC{name: dest}
 		return lastRWC
 	}
@@ -483,17 +506,26 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected clean Close(), got err: %v", err)
 	}
+
+	receiver.m.Lock()
+	defer receiver.m.Unlock()
+
 	if len(receiver.errs) != 1 {
 		t.Errorf("expected connect err")
 	}
-	if lastRWC == nil {
+
+	lastRWCM.Lock()
+	rwc := lastRWC
+	lastRWCM.Unlock()
+
+	if rwc == nil {
 		t.Errorf("expected a lastRWC")
 	}
-	if lastRWC.numReads != 0 {
-		t.Errorf("expected a lastRWC with 0 reads, %#v", lastRWC)
+	if rwc.numReads != 0 {
+		t.Errorf("expected a lastRWC with 0 reads, %#v", rwc)
 	}
-	if lastRWC.numWrites != 1 {
-		t.Errorf("expected a lastRWC with 1 write, %#v", lastRWC)
+	if rwc.numWrites != 1 {
+		t.Errorf("expected a lastRWC with 1 write, %#v", rwc)
 	}
 	if receiver.numSetMetaDatas != 0 {
 		t.Errorf("expected 1 set-meta-data, %#v", receiver)
@@ -504,9 +536,13 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 }
 
 func TestUPROpenStreamReq(t *testing.T) {
-	var lastRWC *TestRWC
+	var lastRWCM sync.Mutex
+	var lastRWC  *TestRWC
 
 	newFakeConn := func(dest string) io.ReadWriteCloser {
+		lastRWCM.Lock()
+		defer lastRWCM.Unlock()
+
 		lastRWC = &TestRWC{
 			name:    dest,
 			readCh:  make(chan RWReq),
@@ -577,7 +613,10 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if !reflect.DeepEqual(c, []string{"tcp", "serverA"}) {
 		t.Errorf("expected connect params, got: %#v", c)
 	}
+
+	lastRWCM.Lock()
 	rwc := lastRWC
+	lastRWCM.Unlock()
 	if rwc == nil {
 		t.Errorf("expected a rwc")
 	}
@@ -620,6 +659,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 	}
 	reqW.resCh <- RWRes{n: len(reqW.buf), err: nil}
 
+	receiver.m.Lock()
 	if len(receiver.errs) != 0 {
 		t.Errorf("expected 0 errs")
 	}
@@ -629,6 +669,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if receiver.numGetMetaDatas != 1 {
 		t.Errorf("expected 1 numGetMetaDatas")
 	}
+	receiver.m.Unlock()
 
 	res = &gomemcached.MCResponse{
 		Opcode: req.Opcode,
@@ -650,6 +691,8 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected clean Close(), got err: %v", err)
 	}
+
+	receiver.m.Lock()
 	if len(receiver.errs) != 0 {
 		t.Errorf("expected 0 errs")
 	}
@@ -662,6 +705,8 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if receiver.meta[2] == nil {
 		t.Errorf("expected meta for vbucket 2")
 	}
+	receiver.m.Unlock()
+
 	vbmd, lastSeq, err := bds.(*bucketDataSource).getVBucketMetaData(2)
 	if err != nil || vbmd == nil {
 		t.Errorf("expected gvbmd to work")
