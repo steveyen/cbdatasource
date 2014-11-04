@@ -687,6 +687,22 @@ func TestUPROpenStreamReq(t *testing.T) {
 	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
 
 	// ------------------------------------------------------------
+	req = &gomemcached.MCRequest{
+		Opcode: gomemcached.UPR_CONTROL,
+	}
+	reqR = <-rwc.readCh
+	copy(reqR.buf, req.HeaderBytes())
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	// ------------------------------------------------------------
+	req = &gomemcached.MCRequest{
+		Opcode: gomemcached.UPR_BUFFERACK,
+	}
+	reqR = <-rwc.readCh
+	copy(reqR.buf, req.HeaderBytes())
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	// ------------------------------------------------------------
 	err = bds.Close()
 	if err != nil {
 		t.Errorf("expected clean Close(), got err: %v", err)
