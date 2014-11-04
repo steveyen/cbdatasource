@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
-	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -289,13 +288,10 @@ func (d *bucketDataSource) refreshCluster() int {
 		bucket.Close()
 
 		d.m.Lock()
-		vbmSame := reflect.DeepEqual(vbm, d.vbm)
 		d.vbm = vbm
 		d.m.Unlock()
 
-		if !vbmSame {
-			d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
-		}
+		d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
 
 		_, alive := <-d.refreshClusterCh // Wait for a refresh kick.
 		if !alive {                      // Or, if we're closed then shutdown.
