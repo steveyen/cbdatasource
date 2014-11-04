@@ -79,7 +79,8 @@ type BucketDataSource interface {
 }
 
 type BucketDataSourceOptions struct {
-	// Used during UPR_OPEN stream setup and other debugging messsages.
+	// Optional - used during UPR_OPEN stream start.  If empty a
+	// random name will be automatically generated.
 	Name string
 
 	// Factor (like 1.5) to increase sleep time between retries
@@ -102,18 +103,20 @@ type BucketDataSourceOptions struct {
 	// Maximum sleep time (millisecs) between retries to data manager.
 	DataManagerSleepMaxMS int
 
-	// Provided to UPR flow control / buffer size.
+	// Buffer size in bytes provided for UPR flow control.
 	FeedBufferSizeBytes uint32
 
-	// Used for UPR flow control and buffer-ack when this percentage
-	// of FeedBufferSizeBytes is reached.
+	// Used for UPR flow control and buffer-ack messages when this
+	// percentage of FeedBufferSizeBytes is reached.
 	FeedBufferAckThreshold float32
 
 	// Optional function to connect to a couchbase cluster manager bucket.
+	// Defaults to ConnectBucket() function in this package.
 	ConnectBucket func(serverURL, poolName, bucketName, bucketUUID string,
 		authFunc AuthFunc) (*couchbase.Bucket, error)
 
 	// Optional function to connect to a couchbase data manager node.
+	// Defaults to memcached.Connect().
 	Connect func(protocol, dest string) (*memcached.Client, error)
 }
 
