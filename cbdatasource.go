@@ -117,6 +117,13 @@ type BucketDataSourceOptions struct {
 	// Used for UPR flow control and buffer-ack when this percentage
 	// of FeedBufferSizeBytes is reached.
 	FeedBufferAckThreshold float32
+
+	// Optional function to connect to a couchbase cluster manager bucket.
+	ConnectBucket func(serverURL, poolName, bucketName, bucketUUID string,
+		authFunc AuthFunc) (*couchbase.Bucket, error)
+
+	// Optional function to connect to a couchbase data manager node.
+	Connect func(protocol, dest string) (*memcached.Client, error)
 }
 
 var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
@@ -230,7 +237,12 @@ func (d *bucketDataSource) Start() error {
 
 func (d *bucketDataSource) refreshCluster() int {
 	for _, serverURL := range d.serverURLs {
-		bucket, err := getBucket(serverURL,
+		connectBucket := d.options.ConnectBucket
+		if connectBucket == nil {
+			connectBucket = ConnectBucket
+		}
+
+		bucket, err := connectBucket(serverURL,
 			d.poolName, d.bucketName, d.bucketUUID, d.authFunc)
 		if err != nil {
 			d.receiver.OnError(err)
@@ -361,7 +373,12 @@ func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 }
 
 func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
-	client, err := memcached.Connect("tcp", server)
+	connect := d.options.Connect
+	if connect == nil {
+		connect = memcached.Connect
+	}
+
+	client, err := connect("tcp", server)
 	if err != nil {
 		d.receiver.OnError(err)
 		return 0
@@ -742,9 +759,8 @@ func (d *bucketDataSource) Close() error {
 // --------------------------------------------------------------
 
 // TODO: Use AUTH'ed approach.
-func getBucket(serverURL, poolName, bucketName, bucketUUID string,
-	authFunc AuthFunc) (
-	*couchbase.Bucket, error) {
+func ConnectBucket(serverURL, poolName, bucketName, bucketUUID string,
+	authFunc AuthFunc) (*couchbase.Bucket, error) {
 	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
 	if err != nil {
 		return nil, err
