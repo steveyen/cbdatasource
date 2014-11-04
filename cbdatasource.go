@@ -439,6 +439,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	ackBytes :=
 		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
 
+	UPR_NOOP := &gomemcached.MCRequest{Opcode: gomemcached.UPR_NOOP}
+
 	for {
 		select {
 		case <-sendErrCh:
@@ -480,7 +482,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				}
 
 			case gomemcached.UPR_NOOP:
-				sendCh <- &gomemcached.MCRequest{Opcode: gomemcached.UPR_NOOP}
+				sendCh <- UPR_NOOP
 
 			case gomemcached.UPR_STREAMREQ:
 				delete(currVBucketIds, vbucketId)
