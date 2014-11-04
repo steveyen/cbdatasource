@@ -16,6 +16,8 @@ import (
 	"testing"
 
 	"github.com/couchbase/gomemcached"
+	"github.com/couchbase/gomemcached/client"
+	"github.com/couchbaselabs/go-couchbase"
 )
 
 type TestMutation struct {
@@ -132,5 +134,55 @@ func TestNewBucketDataSource(t *testing.T) {
 		vbucketIds, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err")
+	}
+}
+
+func TestStart(t *testing.T) {
+	connectBucket := func(serverURL, poolName, bucketName, bucketUUID string,
+		authFunc AuthFunc) (*couchbase.Bucket, error) {
+		return nil, fmt.Errorf("fake connectBucket err")
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		return nil, fmt.Errorf("fake connect err")
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16(nil)
+	var authFunc AuthFunc
+	receiver := &TestReceiver{}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+	err = bds.Close()
+	if err == nil {
+		t.Errorf("expected err on Close before Start")
+	}
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no err on Start")
+	}
+	err = bds.Start()
+	if err == nil {
+		t.Errorf("expected err on re-Start")
+	}
+	err = bds.Close()
+	if err != nil {
+		t.Errorf("expected no err on Close")
+	}
+	err = bds.Close()
+	if err == nil {
+		t.Errorf("expected err on Close")
 	}
 }
