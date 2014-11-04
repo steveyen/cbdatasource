@@ -659,4 +659,20 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if receiver.numGetMetaDatas != 2 {
 		t.Errorf("expected 2 numGetMetaDatas, got: %#v", receiver)
 	}
+	if receiver.meta[2] == nil {
+		t.Errorf("expected meta for vbucket 2")
+	}
+	vbmd, lastSeq, err := bds.(*bucketDataSource).getVBucketMetaData(2)
+	if err != nil || vbmd == nil {
+		t.Errorf("expected gvbmd to work")
+	}
+	if lastSeq != 0 {
+		t.Errorf("expected lastseq of 0")
+	}
+	if len(vbmd.FailOverLog) != 1 ||
+		len(vbmd.FailOverLog[0]) != 2 ||
+		vbmd.FailOverLog[0][0] != 102030 ||
+		vbmd.FailOverLog[0][1] != 302010 {
+		t.Errorf("mismatch failoverlog, got: %#v", vbmd.FailOverLog)
+	}
 }
