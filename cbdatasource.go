@@ -250,6 +250,7 @@ func (d *bucketDataSource) refreshCluster() int {
 			d.receiver.OnError(err)
 			continue // Try another serverURL.
 		}
+
 		vbm := bucket.VBServerMap()
 		if vbm == nil {
 			bucket.Close()
@@ -258,6 +259,7 @@ func (d *bucketDataSource) refreshCluster() int {
 				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
 			continue // Try another serverURL.
 		}
+
 		bucket.Close()
 
 		d.m.Lock()
@@ -750,11 +752,14 @@ func (d *bucketDataSource) Stats() BucketDataSourceStats {
 func (d *bucketDataSource) Close() error {
 	d.m.Lock()
 	defer d.m.Unlock()
+
 	if d.life != "running" {
 		return fmt.Errorf("Close() called when not in running state: %s", d.life)
 	}
 	d.life = "closed"
+
 	close(d.refreshClusterCh)
+
 	return nil
 }
 
