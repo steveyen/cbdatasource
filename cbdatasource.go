@@ -239,7 +239,7 @@ func (d *bucketDataSource) refreshCluster() int {
 		vbm := bucket.VBServerMap()
 		if vbm == nil {
 			bucket.Close()
-			d.receiver.OnError(fmt.Errorf("no vbm,"+
+			d.receiver.OnError(fmt.Errorf("refreshCluster got no vbm,"+
 				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
 				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
 			continue // Try another serverURL.
@@ -280,25 +280,29 @@ func (d *bucketDataSource) refreshWorkers() {
 		for _, vbucketId := range d.vbucketIds {
 			if int(vbucketId) >= len(vbm.VBucketMap) {
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" saw bad vbucketId: %d", vbucketId))
+					" saw bad vbucketId: %d, vbm: %#v",
+					vbucketId, vbm))
 				continue
 			}
 			serverIdxs := vbm.VBucketMap[vbucketId]
 			if serverIdxs == nil || len(serverIdxs) < 1 {
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" no serverIdxs for vbucketId: %d", vbucketId))
+					" no serverIdxs for vbucketId: %d, vbm: %#v",
+					vbucketId, vbm))
 				continue
 			}
 			masterIdx := serverIdxs[0]
 			if int(masterIdx) >= len(vbm.ServerList) {
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" no masterIdx for vbucketId: %d", vbucketId))
+					" no masterIdx for vbucketId: %d, vbm: %#v",
+					vbucketId, vbm))
 				continue
 			}
 			masterServer := vbm.ServerList[masterIdx]
 			if masterServer == "" {
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" no masterServer for vbucketId: %d", vbucketId))
+					" no masterServer for vbucketId: %d, vbm: %#v",
+					vbucketId, vbm))
 				continue
 			}
 			v, exists := vbucketIdsByServer[masterServer]
@@ -449,26 +453,17 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				return cleanup(1, nil) // We saw disconnect; assume we made progress.
 			}
 
-			vbucketId := uint16(res.Opaque)
-			vbucketIdState := currVBucketIds[vbucketId]
-
-			fmt.Printf("worker: vbucketId: %d, vbucketIdState: %s, res: %#v",
-				vbucketId, vbucketIdState, res)
-
-			if vbucketIdState == "" {
-				return cleanup(0, fmt.Errorf("unknown state,"+
-					" vbucketId: %d, res: %#v", vbucketId, res))
-			}
-
 			switch res.Opcode {
 			case gomemcached.UPR_MUTATION,
 				gomemcached.UPR_DELETION,
 				gomemcached.UPR_EXPIRATION:
-				vbucketId := res.Status
+				vbucketId := uint16(res.Status)
 				vbucketIdState := currVBucketIds[vbucketId]
+
 				if vbucketIdState != "running" {
-					return cleanup(0, fmt.Errorf("state not running,"+
-						" vbucketId: %d, res: %#v", vbucketId, res))
+					return cleanup(0, fmt.Errorf("worker non-running,"+
+						" vbucketId: %d, vbucketIdState: %s, res: %#v",
+						vbucketId, vbucketIdState, res))
 				}
 
 				seq := binary.BigEndian.Uint64(res.Extras[:8])
@@ -481,9 +476,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					return cleanup(0, err)
 				}
 
-				// TODO: The consumer may respond to mutation messages
-				// with KEY_ENOENT, EINVAL, ERANGE responses.
-
 			case gomemcached.UPR_NOOP:
 				sendCh <- &gomemcached.MCRequest{
 					Opcode: gomemcached.UPR_NOOP,
@@ -491,18 +483,22 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				}
 
 			case gomemcached.UPR_STREAMREQ:
+				vbucketId := uint16(res.Opaque)
+				vbucketIdState := currVBucketIds[vbucketId]
+
 				delete(currVBucketIds, vbucketId)
 
 				if vbucketIdState != "requested" {
-					return cleanup(0, fmt.Errorf("bad streamreq state,"+
-						" vbucketId: %d, res: %#v", vbucketId, res))
+					return cleanup(0, fmt.Errorf("streamreq non-requested,"+
+						" vbucketId: %d, vbucketIdState: %s, res: %#v",
+						vbucketId, vbucketIdState, res))
 				}
 
 				if res.Status != gomemcached.SUCCESS {
 					if res.Status == gomemcached.ROLLBACK {
 						if len(res.Extras) != 8 {
-							return cleanup(0, fmt.Errorf("invalid rollback extras: %v\n",
-								res.Extras))
+							return cleanup(0, fmt.Errorf("bad rollback extras: %#v",
+								res))
 						}
 
 						rollbackSeq := binary.BigEndian.Uint64(res.Extras)
@@ -541,7 +537,17 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				}
 
 			case gomemcached.UPR_STREAMEND:
+				vbucketId := uint16(res.Status)
+				vbucketIdState := currVBucketIds[vbucketId]
+
 				delete(currVBucketIds, vbucketId)
+
+				if vbucketIdState != "running" &&
+					vbucketIdState != "closing" {
+					return cleanup(0, fmt.Errorf("stream-end bad state,"+
+						" vbucketId: %d, vbucketIdState: %s, res: %#v",
+						vbucketId, vbucketIdState, res))
+				}
 
 				// We should not normally see a stream-end, unless we
 				// were trying to close.  Maybe the vbucket moved, so
@@ -551,8 +557,17 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				}
 
 			case gomemcached.UPR_SNAPSHOT:
+				vbucketId := uint16(res.Status)
+				vbucketIdState := currVBucketIds[vbucketId]
+
+				if vbucketIdState != "running" {
+					return cleanup(0, fmt.Errorf("snapshot non-running,"+
+						" vbucketId: %d, vbucketIdState: %s, res: %#v",
+						vbucketId, vbucketIdState, res))
+				}
+
 				if len(res.Extras) < 20 {
-					return cleanup(0, fmt.Errorf("wrong snapshot extras, res: %#v", res))
+					return cleanup(0, fmt.Errorf("bad snapshot extras, res: %#v", res))
 				}
 
 				v, _, err := d.getVBucketMetaData(vbucketId)
@@ -580,12 +595,12 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 			case gomemcached.UPR_CONTROL:
 				if res.Status != gomemcached.SUCCESS {
-					return cleanup(0, fmt.Errorf("not success control: %#v", res))
+					return cleanup(0, fmt.Errorf("failed control: %#v", res))
 				}
 
 			case gomemcached.UPR_BUFFERACK:
 				if res.Status != gomemcached.SUCCESS {
-					return cleanup(0, fmt.Errorf("not success bufferack: %#v", res))
+					return cleanup(0, fmt.Errorf("failed bufferack: %#v", res))
 				}
 
 			case gomemcached.UPR_FLUSH:
