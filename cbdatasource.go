@@ -830,7 +830,6 @@ func (d *bucketDataSource) Close() error {
 
 	// NOTE: By this point, worker goroutines might still be going,
 	// but should end soon.
-
 	return nil
 }
 
