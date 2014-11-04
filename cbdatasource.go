@@ -537,9 +537,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	currVBucketIds map[uint16]string, res *gomemcached.MCResponse) (
 	progress int, err error) {
 	switch res.Opcode {
-	case gomemcached.UPR_MUTATION,
-		gomemcached.UPR_DELETION,
-		gomemcached.UPR_EXPIRATION:
+	case gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION:
 		vbucketId := uint16(res.Status)
 		vbucketIdState := currVBucketIds[vbucketId]
 
