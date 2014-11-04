@@ -12,28 +12,51 @@
 package cbdatasource
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/couchbase/gomemcached"
 )
 
+type TestMutation struct {
+	delete    bool
+	vbucketId uint16
+	key       []byte
+	seq       uint64
+	res       *gomemcached.MCResponse
+}
+
 type TestReceiver struct {
+	errs []error
+	muts []*TestMutation
+	meta map[uint16][]byte
 }
 
-func (r *TestReceiver) OnError(error) {
+func (r *TestReceiver) OnError(err error) {
+	r.errs = append(r.errs, err)
 }
 
-	// Invoked by the BucketDataSource when it has received a mutation
-	// from the data source.
 func (r *TestReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
 	res *gomemcached.MCResponse) error {
+	r.muts = append(r.muts, &TestMutation{
+		delete:    false,
+		vbucketId: vbucketId,
+		key:       key,
+		seq:       seq,
+		res:       res,
+	})
 	return nil
 }
 
-	// Invoked by the BucketDataSource when it has received a deletion
-	// or expiration from the data source.
 func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
 	res *gomemcached.MCResponse) error {
+	r.muts = append(r.muts, &TestMutation{
+		delete:    true,
+		vbucketId: vbucketId,
+		key:       key,
+		seq:       seq,
+		res:       res,
+	})
 	return nil
 }
 
@@ -43,18 +66,31 @@ func (r *TestReceiver) SnapshotStart(vbucketId uint16,
 }
 
 func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
+	if r.meta == nil {
+		r.meta = make(map[uint16][]byte)
+	}
+	r.meta[vbucketId] = value
 	return nil
 }
 
 func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error) {
-	return nil, 0, nil
+	rv := []byte(nil)
+	if r.meta != nil {
+		rv = r.meta[vbucketId]
+	}
+	for i := len(r.muts) - 1; i >= 0; i = i - 1 {
+		if r.muts[i].vbucketId == vbucketId {
+			return rv, r.muts[i].seq, nil
+		}
+	}
+	return rv, 0, nil
 }
 
 func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
-	return nil
+	return fmt.Errorf("bad-rollback")
 }
 
-func TestNilParams(t *testing.T) {
+func TestNewBucketDataSource(t *testing.T) {
 	serverURLs := []string(nil)
 	bucketUUID := ""
 	vbucketIds := []uint16(nil)
@@ -71,7 +107,6 @@ func TestNilParams(t *testing.T) {
 	serverURLs = []string{"foo"}
 	bucketUUID = ""
 	vbucketIds = []uint16(nil)
-
 	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
 		vbucketIds, authFunc, receiver, options)
 	if err == nil || bds != nil {
@@ -79,7 +114,6 @@ func TestNilParams(t *testing.T) {
 	}
 
 	poolName := ""
-
 	bds, err = NewBucketDataSource(serverURLs, poolName, "bucketName", bucketUUID,
 		vbucketIds, authFunc, receiver, options)
 	if err == nil || bds != nil {
@@ -87,7 +121,6 @@ func TestNilParams(t *testing.T) {
 	}
 
 	bucketName := ""
-
 	bds, err = NewBucketDataSource(serverURLs, "poolName", bucketName, bucketUUID,
 		vbucketIds, authFunc, receiver, options)
 	if err == nil || bds != nil {
