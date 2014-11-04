@@ -439,8 +439,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	ackBytes :=
 		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
 
-	UPR_NOOP := &gomemcached.MCRequest{Opcode: gomemcached.UPR_NOOP}
-
 	for {
 		select {
 		case <-sendErrCh:
@@ -466,6 +464,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			case gomemcached.UPR_MUTATION,
 				gomemcached.UPR_DELETION,
 				gomemcached.UPR_EXPIRATION:
+				vbucketId := res.Status
+				vbucketIdState := currVBucketIds[vbucketId]
 				if vbucketIdState != "running" {
 					return cleanup(0, fmt.Errorf("state not running,"+
 						" vbucketId: %d, res: %#v", vbucketId, res))
@@ -481,8 +481,14 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					return cleanup(0, err)
 				}
 
+				// TODO: The consumer may respond to mutation messages
+				// with KEY_ENOENT, EINVAL, ERANGE responses.
+
 			case gomemcached.UPR_NOOP:
-				sendCh <- UPR_NOOP
+				sendCh <- &gomemcached.MCRequest{
+					Opcode: gomemcached.UPR_NOOP,
+					Opaque: res.Opaque,
+				}
 
 			case gomemcached.UPR_STREAMREQ:
 				delete(currVBucketIds, vbucketId)
