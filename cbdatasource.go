@@ -776,15 +776,32 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 		return err
 	}
 
-	flags := uint32(0)
-
-	uuid := uint64(0)
+	vbucketUUID := uint64(0)
 	if len(vbucketMetaData.FailOverLog) >= 1 {
-		uuid = vbucketMetaData.FailOverLog[len(vbucketMetaData.FailOverLog)-1][0]
+		vbucketUUID = vbucketMetaData.FailOverLog[len(vbucketMetaData.FailOverLog)-1][0]
 	}
 
-	sendCh <- UprStreamReq(vbucketId, flags, uuid, lastSeq, 0xffffffffffffffff,
-		vbucketMetaData.SnapStart, vbucketMetaData.SnapEnd)
+	seqStart := lastSeq
+	seqEnd := uint64(0xffffffffffffffff)
+	flags := uint32(0)
+
+	// TODO: Parameterizing flags & seqEnd might allow for incremental backup?
+
+	req := &gomemcached.MCRequest{
+		Opcode:  gomemcached.UPR_STREAMREQ,
+		VBucket: vbucketId,
+		Opaque:  uint32(vbucketId),
+		Extras:  make([]byte, 48),
+	}
+	binary.BigEndian.PutUint32(req.Extras[:4], flags)
+	binary.BigEndian.PutUint32(req.Extras[4:8], uint32(0)) // Reserved.
+	binary.BigEndian.PutUint64(req.Extras[8:16], seqStart)
+	binary.BigEndian.PutUint64(req.Extras[16:24], seqEnd)
+	binary.BigEndian.PutUint64(req.Extras[24:32], vbucketUUID)
+	binary.BigEndian.PutUint64(req.Extras[32:40], vbucketMetaData.SnapStart)
+	binary.BigEndian.PutUint64(req.Extras[40:48], vbucketMetaData.SnapEnd)
+
+	sendCh <- req
 
 	return nil
 }
@@ -892,24 +909,6 @@ func UPROpen(mc *memcached.Client, name string, bufSize uint32) error {
 		}
 	}
 	return nil
-}
-
-func UprStreamReq(vbucketId uint16, flags uint32, vbucketUUID,
-	seqStart, seqEnd, snapStart, snapEnd uint64) *gomemcached.MCRequest {
-	rq := &gomemcached.MCRequest{
-		Opcode:  gomemcached.UPR_STREAMREQ,
-		VBucket: vbucketId,
-		Opaque:  uint32(vbucketId),
-	}
-	rq.Extras = make([]byte, 48)
-	binary.BigEndian.PutUint32(rq.Extras[:4], flags)
-	binary.BigEndian.PutUint32(rq.Extras[4:8], uint32(0)) // Reserved.
-	binary.BigEndian.PutUint64(rq.Extras[8:16], seqStart)
-	binary.BigEndian.PutUint64(rq.Extras[16:24], seqEnd)
-	binary.BigEndian.PutUint64(rq.Extras[24:32], vbucketUUID)
-	binary.BigEndian.PutUint64(rq.Extras[32:40], snapStart)
-	binary.BigEndian.PutUint64(rq.Extras[40:48], snapEnd)
-	return rq
 }
 
 func ParseFailOverLog(body []byte) ([][]uint64, error) {
