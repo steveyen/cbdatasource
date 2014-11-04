@@ -26,6 +26,7 @@ import (
 	"github.com/couchbaselabs/go-couchbase"
 )
 
+// Interface implemented by the application, or the receiver of data.
 type Receiver interface {
 	// Invoked in advisory fashion by the BucketDataSource when it
 	// encounters an error.  The BucketDataSource will continue to try
@@ -73,8 +74,14 @@ type Receiver interface {
 }
 
 type BucketDataSource interface {
+	// Use Start() to kickoff all the goroutines and connectivity,
+	// after which calls will be made to Receiver methods.
 	Start() error
+
+	// Returns an immutable snapshot of stats.
 	Stats() BucketDataSourceStats
+
+	// Stops the underlying goroutines.
 	Close() error
 }
 
