@@ -50,7 +50,7 @@ type Receiver interface {
 	// commits for previous snapshots as part of this callback (e.g.,
 	// commit any batch write for the previous snapshot).  Or the
 	// Receiver implementation may choose to do nothing.
-	Snapshot(vbucketId uint16, snapStart, snapEnd uint64, snapType uint32) error
+	SnapshotStart(vbucketId uint16, snapStart, snapEnd uint64, snapType uint32) error
 
 	// The Receiver should persist the value parameter of
 	// SetMetaData() for retrieval during some future call to
@@ -548,11 +548,24 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				if len(res.Extras) < 20 {
 					return cleanup(0, fmt.Errorf("wrong snapshot extras, res: %#v", res))
 				}
-				snapStart := binary.BigEndian.Uint64(res.Extras[0:8])
-				snapEnd := binary.BigEndian.Uint64(res.Extras[8:16])
+
+				v, _, err := d.getVBucketMetaData(vbucketId)
+				if err != nil {
+					return cleanup(0, err)
+				}
+
+				v.SnapStart = binary.BigEndian.Uint64(res.Extras[0:8])
+				v.SnapEnd = binary.BigEndian.Uint64(res.Extras[8:16])
+
+				err = d.setVBucketMetaData(vbucketId, v)
+				if err != nil {
+					return cleanup(0, err)
+				}
+
 				snapType := binary.BigEndian.Uint32(res.Extras[16:20])
 
-				err = d.receiver.Snapshot(vbucketId, snapStart, snapEnd, snapType)
+				err = d.receiver.SnapshotStart(vbucketId,
+					v.SnapStart, v.SnapEnd, snapType)
 				if err != nil {
 					return cleanup(0, err)
 				}
