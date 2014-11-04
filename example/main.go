@@ -50,7 +50,7 @@ func main() {
 
 	log.Printf("started bucket data source: %v", b)
 
-	<- make(chan bool)
+	select {}
 }
 
 type ExampleReceiver struct {
