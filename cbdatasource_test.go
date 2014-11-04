@@ -430,7 +430,7 @@ func TestConnectError(t *testing.T) {
 
 func TestConnThatAlwaysErrors(t *testing.T) {
 	var lastRWCM sync.Mutex
-	var lastRWC  *TestRWC
+	var lastRWC *TestRWC
 
 	newFakeConn := func(dest string) io.ReadWriteCloser {
 		lastRWCM.Lock()
@@ -537,7 +537,7 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 
 func TestUPROpenStreamReq(t *testing.T) {
 	var lastRWCM sync.Mutex
-	var lastRWC  *TestRWC
+	var lastRWC *TestRWC
 
 	newFakeConn := func(dest string) io.ReadWriteCloser {
 		lastRWCM.Lock()
@@ -694,7 +694,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 
 	receiver.m.Lock()
 	if len(receiver.errs) != 0 {
-		t.Errorf("expected 0 errs")
+		t.Errorf("expected 0 errs, got: %v", receiver.errs)
 	}
 	if receiver.numSetMetaDatas != 1 {
 		t.Errorf("expected 1 numSetMetaDatas, got: %#v", receiver)
