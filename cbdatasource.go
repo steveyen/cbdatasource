@@ -149,11 +149,11 @@ type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
 // --------------------------------------------------------
 
 type VBucketMetaData struct {
-	SeqStart    uint64 `json:"seqStart"`
-	SeqEnd      uint64 `json:"seqEnd"`
-	SnapStart   uint64 `json:"snapStart"`
-	SnapEnd     uint64 `json:"snapEnd"`
-	FailOverLog [][]uint64
+	SeqStart    uint64     `json:"seqStart"`
+	SeqEnd      uint64     `json:"seqEnd"`
+	SnapStart   uint64     `json:"snapStart"`
+	SnapEnd     uint64     `json:"snapEnd"`
+	FailOverLog [][]uint64 `json:"failOverLog"`
 }
 
 type bucketDataSource struct {
