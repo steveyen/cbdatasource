@@ -74,7 +74,6 @@ type Receiver interface {
 
 type VBucketMetaData struct {
 	VBucketId   uint16 `json:"vbucketId"`
-	VBucketUUID uint64 `json:"vbucketUUID"`
 	SeqStart    uint64 `json:"seqStart"`
 	SeqEnd      uint64 `json:"seqEnd"`
 	SnapStart   uint64 `json:"snapStart"`
@@ -522,10 +521,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					}
 
 					v.FailOverLog = flog
-					if len(flog) > 0 {
-						v.VBucketUUID = flog[len(flog)-1][0]
-						v.SeqStart = flog[len(flog)-1][1]
-					}
 
 					err = d.setVBucketMetaData(vbucketId, v)
 					if err != nil {
@@ -661,7 +656,8 @@ func (d *bucketDataSource) getVBucketMetaData(vbucketId uint16) (
 	return vbucketMetaData, lastSeq, nil
 }
 
-func (d *bucketDataSource) setVBucketMetaData(vbucketId uint16, v *VBucketMetaData) error {
+func (d *bucketDataSource) setVBucketMetaData(vbucketId uint16,
+	v *VBucketMetaData) error {
 	buf, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -679,8 +675,12 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 
 	flags := uint32(0)
 
-	sendCh <- UprStreamReq(vbucketId, flags, vbucketMetaData.VBucketUUID,
-		lastSeq, 0xffffffffffffffff,
+	uuid := uint64(0)
+	if len(vbucketMetaData.FailOverLog) >= 1 {
+		uuid = vbucketMetaData.FailOverLog[len(vbucketMetaData.FailOverLog)-1][0]
+	}
+
+	sendCh <- UprStreamReq(vbucketId, flags, uuid, lastSeq, 0xffffffffffffffff,
 		vbucketMetaData.SnapStart, vbucketMetaData.SnapEnd)
 
 	return nil
