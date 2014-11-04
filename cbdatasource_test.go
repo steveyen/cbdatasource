@@ -292,3 +292,56 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	}
 	bds.Close()
 }
+
+func TestBucketDataSourceStartVBSM(t *testing.T) {
+	var connectBucketResult Bucket
+	var connectBucketErr error
+
+	connectBucket := func(serverURL, poolName,
+		bucketName, bucketUUID string,
+		authFunc AuthFunc) (Bucket, error) {
+		return connectBucketResult, connectBucketErr
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		return nil, nil
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16{0, 1, 2, 3}
+	var authFunc AuthFunc
+	receiver := &TestReceiver{}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	connectBucketResult = &TestBucket{
+		uuid: bucketUUID,
+		vbsm: &couchbase.VBucketServerMap{
+			ServerList: []string{"serverA"},
+			VBucketMap: [][]int{
+				[]int{0},
+				[]int{0},
+				[]int{0},
+				[]int{0},
+			},
+		},
+	}
+	connectBucketErr = nil
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no-err on Start()")
+	}
+	bds.Close()
+}
