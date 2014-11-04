@@ -61,8 +61,8 @@ func main() {
 type ExampleReceiver struct {
 	m sync.Mutex
 
-	seqs map[uint16]uint64
-	meta map[uint16][]byte
+	seqs map[uint16]uint64 // To track max seq #'s we received per vbucketId.
+	meta map[uint16][]byte // To track metadata blob's per vbucketId.
 }
 
 func (r *ExampleReceiver) OnError(err error) {
