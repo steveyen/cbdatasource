@@ -433,6 +433,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	// Values for vbucketId state in currVBucketIds:
 	// "" (dead/closed/unknown), "requested", "running", "closing".
 	currVBucketIds := map[uint16]string{}
+
+	// Track received bytes in case we need to buffer-ack.
 	recvBytesTotal := uint32(0)
 	ackBytes :=
 		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
@@ -454,7 +456,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				vbucketId, vbucketIdState, res)
 
 			if vbucketIdState == "" {
-				return cleanup(1, fmt.Errorf("unknown state,"+
+				return cleanup(0, fmt.Errorf("unknown state,"+
 					" vbucketId: %d, res: %#v", vbucketId, res))
 			}
 
@@ -463,7 +465,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				gomemcached.UPR_DELETION,
 				gomemcached.UPR_EXPIRATION:
 				if vbucketIdState != "running" {
-					return cleanup(1, fmt.Errorf("state not running,"+
+					return cleanup(0, fmt.Errorf("state not running,"+
 						" vbucketId: %d, res: %#v", vbucketId, res))
 				}
 
@@ -474,7 +476,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					err = d.receiver.DataDelete(vbucketId, res.Key, seq, res)
 				}
 				if err != nil {
-					return cleanup(1, err)
+					return cleanup(0, err)
 				}
 
 			case gomemcached.UPR_NOOP:
@@ -484,14 +486,14 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				delete(currVBucketIds, vbucketId)
 
 				if vbucketIdState != "requested" {
-					return cleanup(1, fmt.Errorf("bad streamreq state,"+
+					return cleanup(0, fmt.Errorf("bad streamreq state,"+
 						" vbucketId: %d, res: %#v", vbucketId, res))
 				}
 
 				if res.Status != gomemcached.SUCCESS {
 					if res.Status == gomemcached.ROLLBACK {
 						if len(res.Extras) != 8 {
-							return cleanup(1, fmt.Errorf("invalid rollback extras: %v\n",
+							return cleanup(0, fmt.Errorf("invalid rollback extras: %v\n",
 								res.Extras))
 						}
 
@@ -513,18 +515,18 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				} else { // SUCCESS case.
 					flog, err := ParseFailOverLog(res.Body[:])
 					if err != nil {
-						return cleanup(1, err)
+						return cleanup(0, err)
 					}
 					v, _, err := d.getVBucketMetaData(vbucketId)
 					if err != nil {
-						return cleanup(1, err)
+						return cleanup(0, err)
 					}
 
 					v.FailOverLog = flog
 
 					err = d.setVBucketMetaData(vbucketId, v)
 					if err != nil {
-						return cleanup(1, err)
+						return cleanup(0, err)
 					}
 
 					currVBucketIds[vbucketId] = "running"
@@ -542,7 +544,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 			case gomemcached.UPR_SNAPSHOT:
 				if len(res.Extras) < 20 {
-					return cleanup(1, fmt.Errorf("wrong snapshot extras, res: %#v", res))
+					return cleanup(0, fmt.Errorf("wrong snapshot extras, res: %#v", res))
 				}
 				snapStart := binary.BigEndian.Uint64(res.Extras[0:8])
 				snapEnd := binary.BigEndian.Uint64(res.Extras[8:16])
@@ -550,19 +552,19 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 				err = d.receiver.Snapshot(vbucketId, snapStart, snapEnd, snapType)
 				if err != nil {
-					return cleanup(1, err)
+					return cleanup(0, err)
 				}
 
 				// TODO: Do we need to handle snapAck flag in snapType?
 
 			case gomemcached.UPR_CONTROL:
 				if res.Status != gomemcached.SUCCESS {
-					return cleanup(1, fmt.Errorf("not success control: %#v", res))
+					return cleanup(0, fmt.Errorf("not success control: %#v", res))
 				}
 
 			case gomemcached.UPR_BUFFERACK:
 				if res.Status != gomemcached.SUCCESS {
-					return cleanup(1, fmt.Errorf("not success bufferack: %#v", res))
+					return cleanup(0, fmt.Errorf("not success bufferack: %#v", res))
 				}
 
 			case gomemcached.UPR_FLUSH:
@@ -622,21 +624,21 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			for wantVBucketId, _ := range wantVBucketIds {
 				state := currVBucketIds[wantVBucketId]
 				if state == "closing" {
-					return cleanup(1, fmt.Errorf("wanting a closing vbucket: %d",
+					return cleanup(0, fmt.Errorf("wanting a closing vbucket: %d",
 						wantVBucketId))
 				}
 				if state == "" {
 					currVBucketIds[wantVBucketId] = "requested"
 					err := d.sendStreamReq(sendCh, wantVBucketId)
 					if err != nil {
-						return cleanup(1, err)
+						return cleanup(0, err)
 					}
 				} // Else, state of "requested" or "running", so no-op.
 			}
 		}
 	}
 
-	return -1 // Unreached.
+	return cleanup(-1, nil) // Unreached.
 }
 
 func (d *bucketDataSource) getVBucketMetaData(vbucketId uint16) (
