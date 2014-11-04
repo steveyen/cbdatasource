@@ -13,7 +13,46 @@ package cbdatasource
 
 import (
 	"testing"
+
+	"github.com/couchbase/gomemcached"
 )
+
+type TestReceiver struct {
+}
+
+func (r *TestReceiver) OnError(error) {
+}
+
+	// Invoked by the BucketDataSource when it has received a mutation
+	// from the data source.
+func (r *TestReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
+	res *gomemcached.MCResponse) error {
+	return nil
+}
+
+	// Invoked by the BucketDataSource when it has received a deletion
+	// or expiration from the data source.
+func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
+	res *gomemcached.MCResponse) error {
+	return nil
+}
+
+func (r *TestReceiver) SnapshotStart(vbucketId uint16,
+	snapStart, snapEnd uint64, snapType uint32) error {
+	return nil
+}
+
+func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
+	return nil
+}
+
+func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error) {
+	return nil, 0, nil
+}
+
+func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
+	return nil
+}
 
 func TestNilParams(t *testing.T) {
 	serverURLs := []string(nil)
@@ -37,5 +76,12 @@ func TestNilParams(t *testing.T) {
 		vbucketIds, authFunc, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
+	}
+
+	receiver = &TestReceiver{}
+	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err")
 	}
 }
