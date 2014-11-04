@@ -14,6 +14,7 @@ package cbdatasource
 import (
 	"fmt"
 	"testing"
+	"reflect"
 
 	"github.com/couchbase/gomemcached"
 	"github.com/couchbase/gomemcached/client"
@@ -153,7 +154,7 @@ func TestNewBucketDataSource(t *testing.T) {
 	}
 }
 
-func TestStart(t *testing.T) {
+func TestImmediateStartClose(t *testing.T) {
 	connectBucket := func(serverURL, poolName, bucketName, bucketUUID string,
 		authFunc AuthFunc) (Bucket, error) {
 		return nil, fmt.Errorf("fake connectBucket err")
@@ -207,12 +208,13 @@ func TestStart(t *testing.T) {
 func TestBucketDataSourceStart(t *testing.T) {
 	var connectBucketResult Bucket
 	var connectBucketErr error
+	var connectBucketCh chan []string
 
 	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string,
-		authFunc AuthFunc) (Bucket, error) {
-		return connectBucketResult, connectBucketErr
-	}
+		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
+			connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+			return connectBucketResult, connectBucketErr
+		}
 
 	connect := func(protocol, dest string) (*memcached.Client, error) {
 		if protocol != "tcp" || dest != "serverA" {
@@ -236,6 +238,7 @@ func TestBucketDataSourceStart(t *testing.T) {
 		vbsm: nil,
 	}
 	connectBucketErr = nil
+	connectBucketCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
 		vbucketIds, authFunc, receiver, options)
@@ -245,6 +248,10 @@ func TestBucketDataSourceStart(t *testing.T) {
 	err = bds.Start()
 	if err != nil {
 		t.Errorf("expected no-err on Start()")
+	}
+	c := <- connectBucketCh
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+		t.Errorf("expected connectBucket params")
 	}
 	bds.Close()
 }
