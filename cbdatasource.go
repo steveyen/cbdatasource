@@ -331,7 +331,7 @@ func (d *bucketDataSource) refreshWorkers() {
 				continue
 			}
 			serverIdxs := vbm.VBucketMap[vbucketId]
-			if serverIdxs == nil || len(serverIdxs) < 1 {
+			if serverIdxs == nil || len(serverIdxs) <= 0 {
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
 					" no serverIdxs for vbucketId: %d, vbm: %#v",
 					vbucketId, vbm))
@@ -371,7 +371,7 @@ func (d *bucketDataSource) refreshWorkers() {
 		for server, serverVBucketIds := range vbucketIdsByServer {
 			workerCh, exists := workers[server]
 			if !exists || workerCh == nil {
-				workerCh = make(chan []uint16)
+				workerCh = make(chan []uint16, 1)
 				workers[server] = workerCh
 				d.workerStart(server, workerCh)
 			}
@@ -945,11 +945,9 @@ func ExponentialBackoffLoop(name string,
 		}
 		if progress > 0 {
 			// When there was some progress, we can reset nextSleepMS.
-			// log.Printf("backoff: %s, progress: %d", name, progress)
 			nextSleepMS = startSleepMS
 		} else {
 			// If zero progress was made this cycle, then sleep.
-			// log.Printf("backoff: %s, sleep: %d (ms)", name, nextSleepMS)
 			time.Sleep(time.Duration(nextSleepMS) * time.Millisecond)
 
 			// Increase nextSleepMS in case next time also has 0 progress.

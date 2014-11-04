@@ -13,8 +13,9 @@ package cbdatasource
 
 import (
 	"fmt"
-	"testing"
 	"reflect"
+	"runtime"
+	"testing"
 
 	"github.com/couchbase/gomemcached"
 	"github.com/couchbase/gomemcached/client"
@@ -22,11 +23,13 @@ import (
 )
 
 type TestBucket struct {
-	uuid string
-	vbsm *couchbase.VBucketServerMap
+	uuid     string
+	vbsm     *couchbase.VBucketServerMap
+	numClose int
 }
 
 func (bw *TestBucket) Close() {
+	bw.numClose += 1
 }
 
 func (bw *TestBucket) GetUUID() string {
@@ -49,9 +52,12 @@ type TestReceiver struct {
 	errs []error
 	muts []*TestMutation
 	meta map[uint16][]byte
+
+	testName string
 }
 
 func (r *TestReceiver) OnError(err error) {
+	// fmt.Printf("  testName: %s: %v\n", r.testName, err)
 	r.errs = append(r.errs, err)
 }
 
@@ -146,7 +152,7 @@ func TestNewBucketDataSource(t *testing.T) {
 		t.Errorf("expected err")
 	}
 
-	receiver = &TestReceiver{}
+	receiver = &TestReceiver{testName: "TestNewBucketDataSource"}
 	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
 		vbucketIds, authFunc, receiver, options)
 	if err != nil || bds == nil {
@@ -171,7 +177,7 @@ func TestImmediateStartClose(t *testing.T) {
 	bucketUUID := ""
 	vbucketIds := []uint16(nil)
 	var authFunc AuthFunc
-	receiver := &TestReceiver{}
+	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
 		Connect:       connect,
@@ -205,21 +211,23 @@ func TestImmediateStartClose(t *testing.T) {
 	}
 }
 
-func TestBucketDataSourceStart(t *testing.T) {
+func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	var connectBucketResult Bucket
 	var connectBucketErr error
 	var connectBucketCh chan []string
+	var connectCh chan []string
 
 	connectBucket := func(serverURL, poolName,
 		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
-			connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
-			return connectBucketResult, connectBucketErr
-		}
+		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+		return connectBucketResult, connectBucketErr
+	}
 
 	connect := func(protocol, dest string) (*memcached.Client, error) {
 		if protocol != "tcp" || dest != "serverA" {
 			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
 		}
+		connectCh <- []string{protocol, dest}
 		return nil, fmt.Errorf("fake connect err")
 	}
 
@@ -227,7 +235,7 @@ func TestBucketDataSourceStart(t *testing.T) {
 	bucketUUID := ""
 	vbucketIds := []uint16(nil)
 	var authFunc AuthFunc
-	receiver := &TestReceiver{}
+	receiver := &TestReceiver{testName: "TestNewBucketDataSource"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
 		Connect:       connect,
@@ -249,65 +257,34 @@ func TestBucketDataSourceStart(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no-err on Start()")
 	}
-	c := <- connectBucketCh
+	c := <-connectBucketCh
 	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
 		t.Errorf("expected connectBucket params")
 	}
-	bds.Close()
-}
-
-func TestBucketDataSourceStartNilVBSM(t *testing.T) {
-	var connectBucketResult Bucket
-	var connectBucketErr error
-
-	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string,
-		authFunc AuthFunc) (Bucket, error) {
-		return connectBucketResult, connectBucketErr
+	runtime.Gosched()
+	select {
+	case c := <-connectCh:
+		t.Errorf("expected no connect due to nil vbsm, got: %#v", c)
+	default:
 	}
-
-	connect := func(protocol, dest string) (*memcached.Client, error) {
-		if protocol != "tcp" || dest != "serverA" {
-			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
-		}
-		return nil, fmt.Errorf("fake connect err")
-	}
-
-	serverURLs := []string{"serverA"}
-	bucketUUID := ""
-	vbucketIds := []uint16(nil)
-	var authFunc AuthFunc
-	receiver := &TestReceiver{}
-	options := &BucketDataSourceOptions{
-		ConnectBucket: connectBucket,
-		Connect:       connect,
-	}
-
-	connectBucketResult = &TestBucket{
-		uuid: bucketUUID,
-		vbsm: nil,
-	}
-	connectBucketErr = nil
-
-	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
-	if err != nil || bds == nil {
-		t.Errorf("expected no err, got err: %v", err)
-	}
-	err = bds.Start()
+	err = bds.Close()
 	if err != nil {
-		t.Errorf("expected no-err on Start()")
+		t.Errorf("expected clean Close(), got err: %v", err)
 	}
-	bds.Close()
+	if len(receiver.errs) != 1 {
+		t.Errorf("expected connect err")
+	}
 }
 
 func TestBucketDataSourceStartVBSM(t *testing.T) {
 	var connectBucketResult Bucket
 	var connectBucketErr error
+	var connectBucketCh chan []string
+	var connectCh chan []string
 
 	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string,
-		authFunc AuthFunc) (Bucket, error) {
+		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
 		return connectBucketResult, connectBucketErr
 	}
 
@@ -315,14 +292,16 @@ func TestBucketDataSourceStartVBSM(t *testing.T) {
 		if protocol != "tcp" || dest != "serverA" {
 			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
 		}
-		return nil, nil
+		connectCh <- []string{protocol, dest}
+		return nil, fmt.Errorf("fake-connect-error, protocol: %s, dest: %s",
+			protocol, dest)
 	}
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
 	vbucketIds := []uint16{0, 1, 2, 3}
 	var authFunc AuthFunc
-	receiver := &TestReceiver{}
+	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
 		Connect:       connect,
@@ -341,6 +320,8 @@ func TestBucketDataSourceStartVBSM(t *testing.T) {
 		},
 	}
 	connectBucketErr = nil
+	connectBucketCh = make(chan []string)
+	connectCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
 		vbucketIds, authFunc, receiver, options)
@@ -351,5 +332,19 @@ func TestBucketDataSourceStartVBSM(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no-err on Start()")
 	}
-	bds.Close()
+	c := <-connectBucketCh
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+		t.Errorf("expected connectBucket params, got: %#v", c)
+	}
+	c = <-connectCh
+	if !reflect.DeepEqual(c, []string{"tcp", "serverA"}) {
+		t.Errorf("expected connect params, got: %#v", c)
+	}
+	err = bds.Close()
+	if err != nil {
+		t.Errorf("expected clean Close(), got err: %v", err)
+	}
+	if len(receiver.errs) != 1 {
+		t.Errorf("expected connect err")
+	}
 }
