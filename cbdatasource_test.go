@@ -20,6 +20,22 @@ import (
 	"github.com/couchbaselabs/go-couchbase"
 )
 
+type TestBucket struct {
+	uuid string
+	vbsm *couchbase.VBucketServerMap
+}
+
+func (bw *TestBucket) Close() {
+}
+
+func (bw *TestBucket) GetUUID() string {
+	return bw.uuid
+}
+
+func (bw *TestBucket) VBServerMap() *couchbase.VBucketServerMap {
+	return bw.vbsm
+}
+
 type TestMutation struct {
 	delete    bool
 	vbucketId uint16
@@ -139,7 +155,7 @@ func TestNewBucketDataSource(t *testing.T) {
 
 func TestStart(t *testing.T) {
 	connectBucket := func(serverURL, poolName, bucketName, bucketUUID string,
-		authFunc AuthFunc) (*couchbase.Bucket, error) {
+		authFunc AuthFunc) (Bucket, error) {
 		return nil, fmt.Errorf("fake connectBucket err")
 	}
 
@@ -185,4 +201,94 @@ func TestStart(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected err on Close")
 	}
+}
+
+func TestBucketDataSourceStart(t *testing.T) {
+	var connectBucketResult Bucket
+	var connectBucketErr error
+
+	connectBucket := func(serverURL, poolName,
+		bucketName, bucketUUID string,
+		authFunc AuthFunc) (Bucket, error) {
+		return connectBucketResult, connectBucketErr
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		return nil, fmt.Errorf("fake connect err")
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16(nil)
+	var authFunc AuthFunc
+	receiver := &TestReceiver{}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	connectBucketResult = &TestBucket{
+		uuid: bucketUUID,
+		vbsm: nil,
+	}
+	connectBucketErr = nil
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no-err on Start()")
+	}
+	bds.Close()
+}
+
+func TestBucketDataSourceStartNilVBSM(t *testing.T) {
+	var connectBucketResult Bucket
+	var connectBucketErr error
+
+	connectBucket := func(serverURL, poolName,
+		bucketName, bucketUUID string,
+		authFunc AuthFunc) (Bucket, error) {
+		return connectBucketResult, connectBucketErr
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		return nil, fmt.Errorf("fake connect err")
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16(nil)
+	var authFunc AuthFunc
+	receiver := &TestReceiver{}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	connectBucketResult = &TestBucket{
+		uuid: bucketUUID,
+		vbsm: nil,
+	}
+	connectBucketErr = nil
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no-err on Start()")
+	}
+	bds.Close()
 }

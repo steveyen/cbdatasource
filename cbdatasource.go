@@ -120,11 +120,17 @@ type BucketDataSourceOptions struct {
 	// Optional function to connect to a couchbase cluster manager bucket.
 	// Defaults to ConnectBucket() function in this package.
 	ConnectBucket func(serverURL, poolName, bucketName, bucketUUID string,
-		authFunc AuthFunc) (*couchbase.Bucket, error)
+		authFunc AuthFunc) (Bucket, error)
 
 	// Optional function to connect to a couchbase data manager node.
 	// Defaults to memcached.Connect().
 	Connect func(protocol, dest string) (*memcached.Client, error)
+}
+
+type Bucket interface {
+	Close()
+	GetUUID()     string
+	VBServerMap() *couchbase.VBucketServerMap
 }
 
 var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
@@ -263,7 +269,7 @@ func (d *bucketDataSource) refreshCluster() int {
 			bucket.Close()
 			d.receiver.OnError(fmt.Errorf("refreshCluster got no vbm,"+
 				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-				serverURL, d.bucketName, d.bucketUUID, bucket.UUID))
+				serverURL, d.bucketName, d.bucketUUID, bucket.GetUUID()))
 			continue // Try another serverURL.
 		}
 
@@ -780,9 +786,25 @@ func (d *bucketDataSource) Close() error {
 
 // --------------------------------------------------------------
 
+type bucketWrapper struct {
+	b *couchbase.Bucket
+}
+
+func (bw *bucketWrapper) Close() {
+	bw.b.Close()
+}
+
+func (bw *bucketWrapper) GetUUID() string {
+	return bw.b.UUID
+}
+
+func (bw *bucketWrapper) VBServerMap() *couchbase.VBucketServerMap {
+	return bw.b.VBServerMap()
+}
+
 // TODO: Use AUTH'ed approach.
 func ConnectBucket(serverURL, poolName, bucketName, bucketUUID string,
-	authFunc AuthFunc) (*couchbase.Bucket, error) {
+	authFunc AuthFunc) (Bucket, error) {
 	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
 	if err != nil {
 		return nil, err
@@ -798,7 +820,7 @@ func ConnectBucket(serverURL, poolName, bucketName, bucketUUID string,
 			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
 			serverURL, bucketName, bucketUUID, bucket.UUID)
 	}
-	return bucket, nil
+	return &bucketWrapper{b: bucket}, nil
 }
 
 func UPROpen(mc *memcached.Client, name string, bufSize uint32) error {
