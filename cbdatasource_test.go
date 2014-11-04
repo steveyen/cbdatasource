@@ -78,6 +78,22 @@ func TestNilParams(t *testing.T) {
 		t.Errorf("expected err")
 	}
 
+	poolName := ""
+
+	bds, err = NewBucketDataSource(serverURLs, poolName, "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err == nil || bds != nil {
+		t.Errorf("expected err")
+	}
+
+	bucketName := ""
+
+	bds, err = NewBucketDataSource(serverURLs, "poolName", bucketName, bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err == nil || bds != nil {
+		t.Errorf("expected err")
+	}
+
 	receiver = &TestReceiver{}
 	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
 		vbucketIds, authFunc, receiver, options)
