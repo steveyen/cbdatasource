@@ -413,7 +413,7 @@ func TestConnectError(t *testing.T) {
 	}
 }
 
-func TestReadError(t *testing.T) {
+func TestConnThatAlwaysErrors(t *testing.T) {
 	var lastRWC *TestRWC
 
 	newFakeConn := func(dest string) io.ReadWriteCloser {
