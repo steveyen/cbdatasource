@@ -181,6 +181,7 @@ func TestStart(t *testing.T) {
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
+
 	err = bds.Close()
 	if err == nil {
 		t.Errorf("expected err on Close before Start")

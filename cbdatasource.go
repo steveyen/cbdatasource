@@ -129,7 +129,7 @@ type BucketDataSourceOptions struct {
 
 type Bucket interface {
 	Close()
-	GetUUID()     string
+	GetUUID() string
 	VBServerMap() *couchbase.VBucketServerMap
 }
 
@@ -175,9 +175,10 @@ type bucketDataSource struct {
 	refreshClusterCh chan string
 	refreshWorkersCh chan string
 
-	m    sync.Mutex // Protects all the below fields.
-	life string     // Valid life states: "" (unstarted); "running"; "closed".
-	vbm  *couchbase.VBucketServerMap
+	m        sync.Mutex // Protects all the below fields.
+	life     string     // Valid life states: "" (unstarted); "running"; "closed".
+	vbm      *couchbase.VBucketServerMap
+	closedCh chan bool
 }
 
 func NewBucketDataSource(serverURLs []string,
@@ -211,6 +212,7 @@ func NewBucketDataSource(serverURLs []string,
 
 		refreshClusterCh: make(chan string, 1),
 		refreshWorkersCh: make(chan string, 1),
+		closedCh:         make(chan bool),
 	}, nil
 }
 
@@ -250,7 +252,18 @@ func (d *bucketDataSource) Start() error {
 	return nil
 }
 
+func (d *bucketDataSource) isRunning() bool {
+	d.m.Lock()
+	life := d.life
+	d.m.Unlock()
+	return life == "running"
+}
+
 func (d *bucketDataSource) refreshCluster() int {
+	if !d.isRunning() {
+		return -1
+	}
+
 	for _, serverURL := range d.serverURLs {
 		connectBucket := d.options.ConnectBucket
 		if connectBucket == nil {
@@ -367,6 +380,8 @@ func (d *bucketDataSource) refreshWorkers() {
 	for _, workerCh := range workers {
 		close(workerCh)
 	}
+
+	close(d.closedCh)
 }
 
 // A worker connects to one data manager server.
@@ -390,6 +405,10 @@ func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 }
 
 func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
+	if !d.isRunning() {
+		return -1
+	}
+
 	connect := d.options.Connect
 	if connect == nil {
 		connect = memcached.Connect
@@ -772,14 +791,16 @@ func (d *bucketDataSource) Stats() BucketDataSourceStats {
 
 func (d *bucketDataSource) Close() error {
 	d.m.Lock()
-	defer d.m.Unlock()
-
 	if d.life != "running" {
+		d.m.Unlock()
 		return fmt.Errorf("Close() called when not in running state: %s", d.life)
 	}
 	d.life = "closed"
+	d.m.Unlock()
 
 	close(d.refreshClusterCh)
+
+	<-d.closedCh
 
 	return nil
 }
