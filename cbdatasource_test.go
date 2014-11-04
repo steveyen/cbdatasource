@@ -53,6 +53,11 @@ type TestReceiver struct {
 	muts []*TestMutation
 	meta map[uint16][]byte
 
+	numSnapshotStarts int
+	numSetMetaDatas   int
+	numGetMetaDatas   int
+	numRollbacks      int
+
 	testName string
 }
 
@@ -87,10 +92,12 @@ func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
 
 func (r *TestReceiver) SnapshotStart(vbucketId uint16,
 	snapStart, snapEnd uint64, snapType uint32) error {
+	r.numSnapshotStarts += 1
 	return nil
 }
 
 func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
+	r.numSetMetaDatas += 1
 	if r.meta == nil {
 		r.meta = make(map[uint16][]byte)
 	}
@@ -99,6 +106,7 @@ func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
 }
 
 func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error) {
+	r.numGetMetaDatas += 1
 	rv := []byte(nil)
 	if r.meta != nil {
 		rv = r.meta[vbucketId]
@@ -112,6 +120,7 @@ func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint
 }
 
 func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
+	r.numRollbacks += 1
 	return fmt.Errorf("bad-rollback")
 }
 
@@ -489,5 +498,11 @@ func TestReadError(t *testing.T) {
 	}
 	if lastRWC.numWrites != 1 {
 		t.Errorf("expected a lastRWC with 1 write, %#v", lastRWC)
+	}
+	if receiver.numSetMetaDatas != 0 {
+		t.Errorf("expected 1 set-meta-data, %#v", receiver)
+	}
+	if receiver.numGetMetaDatas != 0 {
+		t.Errorf("expected 1 get-meta-data, %#v", receiver)
 	}
 }
