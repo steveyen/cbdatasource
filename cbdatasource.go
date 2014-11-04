@@ -318,10 +318,23 @@ func (d *bucketDataSource) refreshWorkers() {
 		vbm := d.vbm
 		d.m.Unlock()
 
-		// Group the vbm's vbucketIds by server.
+		if vbm == nil {
+			continue
+		}
+
+		// If nil vbucketIds, then default to all vbucketIds.
+		vbucketIds := d.vbucketIds
+		if vbucketIds == nil {
+			vbucketIds = make([]uint16, len(vbm.VBucketMap))
+			for i := 0; i < len(vbucketIds); i++ {
+				vbucketIds[i] = uint16(i)
+			}
+		}
+
+		// Group the wanted vbucketIds by server.
 		vbucketIdsByServer := make(map[string][]uint16)
 
-		for _, vbucketId := range d.vbucketIds {
+		for _, vbucketId := range vbucketIds {
 			if int(vbucketId) >= len(vbm.VBucketMap) {
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
 					" saw bad vbucketId: %d, vbm: %#v",
