@@ -12,6 +12,7 @@
 package cbdatasource
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"reflect"
@@ -504,5 +505,109 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	}
 	if receiver.numGetMetaDatas != 0 {
 		t.Errorf("expected 1 get-meta-data, %#v", receiver)
+	}
+}
+
+func TestUPROpen(t *testing.T) {
+	var lastRWC *TestRWC
+
+	newFakeConn := func(dest string) io.ReadWriteCloser {
+		lastRWC = &TestRWC{
+			name: dest,
+			readCh: make(chan RWReq),
+			writeCh: make(chan RWReq),
+		}
+		return lastRWC
+	}
+
+	var connectBucketResult Bucket
+	var connectBucketErr error
+	var connectBucketCh chan []string
+	var connectCh chan []string
+
+	connectBucket := func(serverURL, poolName,
+		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+		return connectBucketResult, connectBucketErr
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		connectCh <- []string{protocol, dest}
+		return memcached.Wrap(newFakeConn(dest))
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16{0, 1, 2, 3}
+	var authFunc AuthFunc
+	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	connectBucketResult = &TestBucket{
+		uuid: bucketUUID,
+		vbsm: &couchbase.VBucketServerMap{
+			ServerList: []string{"serverA"},
+			VBucketMap: [][]int{
+				[]int{0},
+				[]int{0},
+				[]int{0},
+				[]int{0},
+			},
+		},
+	}
+	connectBucketErr = nil
+	connectBucketCh = make(chan []string)
+	connectCh = make(chan []string)
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no-err on Start()")
+	}
+	c := <-connectBucketCh
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+		t.Errorf("expected connectBucket params, got: %#v", c)
+	}
+	c = <-connectCh
+	if !reflect.DeepEqual(c, []string{"tcp", "serverA"}) {
+		t.Errorf("expected connect params, got: %#v", c)
+	}
+	rwc := lastRWC
+	if rwc == nil {
+		t.Errorf("expected a rwc")
+	}
+
+	reqW := <- rwc.writeCh
+	req := &gomemcached.MCRequest{}
+	n, err := req.Receive(bytes.NewReader(reqW.buf), nil)
+	if err != nil || n < 24 {
+		t.Errorf("expected read req to work, err: %v", err)
+	}
+	reqW.resCh <- RWRes{n: len(reqW.buf), err: nil}
+
+	res := &gomemcached.MCResponse{
+		Opcode: req.Opcode,
+		Opaque: req.Opaque,
+	}
+	reqR := <- rwc.readCh
+	copy(reqR.buf, res.HeaderBytes())
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	err = bds.Close()
+	if err != nil {
+		t.Errorf("expected clean Close(), got err: %v", err)
+	}
+	if len(receiver.errs) != 0 {
+		t.Errorf("expected 0 errs")
 	}
 }
