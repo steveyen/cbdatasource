@@ -313,7 +313,9 @@ func (d *bucketDataSource) refreshCluster() int {
 }
 
 func (d *bucketDataSource) refreshWorkers() {
-	workers := make(map[string]chan []uint16) // Keyed by server.
+	// Keyed by server, value is chan of array of vbucketId's that the
+	// worker needs to provide.
+	workers := make(map[string]chan []uint16)
 
 	for _ = range d.refreshWorkersCh { // Wait for a refresh kick.
 		d.m.Lock()
