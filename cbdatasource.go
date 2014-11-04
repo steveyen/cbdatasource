@@ -72,15 +72,6 @@ type Receiver interface {
 	Rollback(vbucketId uint16, rollbackSeq uint64) error
 }
 
-type VBucketMetaData struct {
-	VBucketId   uint16 `json:"vbucketId"`
-	SeqStart    uint64 `json:"seqStart"`
-	SeqEnd      uint64 `json:"seqEnd"`
-	SnapStart   uint64 `json:"snapStart"`
-	SnapEnd     uint64 `json:"snapEnd"`
-	FailOverLog [][]uint64
-}
-
 type BucketDataSource interface {
 	Start() error
 	Stats() BucketDataSourceStats
@@ -143,7 +134,17 @@ type BucketDataSourceStats struct {
 	// TODO.
 }
 
+type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
+
 // --------------------------------------------------------
+
+type VBucketMetaData struct {
+	SeqStart    uint64 `json:"seqStart"`
+	SeqEnd      uint64 `json:"seqEnd"`
+	SnapStart   uint64 `json:"snapStart"`
+	SnapEnd     uint64 `json:"snapEnd"`
+	FailOverLog [][]uint64
+}
 
 type bucketDataSource struct {
 	serverURLs []string
@@ -162,8 +163,6 @@ type bucketDataSource struct {
 	life string     // Valid life states: "" (unstarted); "running"; "closed".
 	vbm  *couchbase.VBucketServerMap
 }
-
-type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
 
 func NewBucketDataSource(serverURLs []string,
 	poolName, bucketName, bucketUUID string,
