@@ -35,7 +35,7 @@ type Receiver interface {
 
 	// Invoked by the BucketDataSource when it has received a mutation
 	// from the data source.
-	DataUpdate(vbucketId uint16, key []byte, seq uint64, val []byte,
+	DataUpdate(vbucketId uint16, key []byte, seq uint64,
 		r *gomemcached.MCResponse) error
 
 	// Invoked by the BucketDataSource when it has received a deletion
@@ -464,9 +464,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 						" vbucketId: %d, res: %#v", vbucketId, res))
 				}
 
-				seq := uint64(0) // TODO: make this real.
+				seq := binary.BigEndian.Uint64(res.Extras[:8])
 				if res.Opcode == gomemcached.UPR_MUTATION {
-					err = d.receiver.DataUpdate(vbucketId, res.Key, seq, res.Body, res)
+					err = d.receiver.DataUpdate(vbucketId, res.Key, seq, res)
 				} else {
 					err = d.receiver.DataDelete(vbucketId, res.Key, seq, res)
 				}
@@ -512,13 +512,16 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					if err != nil {
 						return cleanup(1, err)
 					}
-
 					v, _, err := d.getVBucketMetaData(vbucketId)
 					if err != nil {
 						return cleanup(1, err)
 					}
 
 					v.FailOverLog = flog
+					if len(flog) > 0 {
+						v.VBucketUUID = flog[len(flog)-1][0]
+						v.SeqStart = flog[len(flog)-1][1]
+					}
 
 					err = d.setVBucketMetaData(vbucketId, v)
 					if err != nil {
@@ -613,7 +616,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 							VBucket: currVBucketId,
 							Opaque:  uint32(currVBucketId),
 						}
-					} // Else, state of "" or "closing", so-no-op.
+					} // Else, state of "" or "closing", so no-op.
 				}
 			}
 
@@ -766,7 +769,7 @@ func UprStreamReq(vbucketId uint16, flags uint32, vbucketUUID,
 		Opaque:  uint32(vbucketId),
 	}
 	rq.Extras = make([]byte, 48)
-	binary.BigEndian.PutUint32(rq.Extras[:4], flags)      // TODO: what flags do we need?
+	binary.BigEndian.PutUint32(rq.Extras[:4], flags)
 	binary.BigEndian.PutUint32(rq.Extras[4:8], uint32(0)) // Reserved.
 	binary.BigEndian.PutUint64(rq.Extras[8:16], seqStart)
 	binary.BigEndian.PutUint64(rq.Extras[16:24], seqEnd)
@@ -782,9 +785,9 @@ func ParseFailOverLog(body []byte) ([][]uint64, error) {
 	}
 	flog := make([][]uint64, len(body)/16)
 	for i, j := 0, 0; i < len(body); i += 16 {
-		vuuid := binary.BigEndian.Uint64(body[i : i+8])
-		seqno := binary.BigEndian.Uint64(body[i+8 : i+16])
-		flog[j] = []uint64{vuuid, seqno}
+		uuid := binary.BigEndian.Uint64(body[i : i+8])
+		seqn := binary.BigEndian.Uint64(body[i+8 : i+16])
+		flog[j] = []uint64{uuid, seqn}
 		j++
 	}
 	return flog, nil
