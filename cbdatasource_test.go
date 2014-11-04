@@ -13,6 +13,7 @@ package cbdatasource
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"reflect"
@@ -139,7 +140,7 @@ func (c *TestRWC) Read(p []byte) (n int, err error) {
 	if c.readCh != nil {
 		resCh := make(chan RWRes)
 		c.readCh <- RWReq{op: "read", buf: p, resCh: resCh}
-		res := <- resCh
+		res := <-resCh
 		return res.n, res.err
 	}
 	return 0, fmt.Errorf("fake-read-err")
@@ -150,27 +151,21 @@ func (c *TestRWC) Write(p []byte) (n int, err error) {
 	if c.writeCh != nil {
 		resCh := make(chan RWRes)
 		c.writeCh <- RWReq{op: "write", buf: p, resCh: resCh}
-		res := <- resCh
+		res := <-resCh
 		return res.n, res.err
 	}
 	return 0, fmt.Errorf("fake-write-err")
 }
 
 func (c *TestRWC) Close() error {
-	if c.readCh != nil {
-		close(c.readCh)
-		c.readCh = nil
-	}
-	if c.writeCh != nil {
-		close(c.writeCh)
-		c.writeCh = nil
-	}
+	c.readCh = nil
+	c.writeCh = nil
 	return nil
 }
 
 type RWReq struct {
-	op  string
-	buf []byte
+	op    string
+	buf   []byte
 	resCh chan RWRes
 }
 
@@ -508,13 +503,13 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	}
 }
 
-func TestUPROpen(t *testing.T) {
+func TestUPROpenStreamReq(t *testing.T) {
 	var lastRWC *TestRWC
 
 	newFakeConn := func(dest string) io.ReadWriteCloser {
 		lastRWC = &TestRWC{
-			name: dest,
-			readCh: make(chan RWReq),
+			name:    dest,
+			readCh:  make(chan RWReq),
 			writeCh: make(chan RWReq),
 		}
 		return lastRWC
@@ -541,7 +536,7 @@ func TestUPROpen(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
-	vbucketIds := []uint16{0, 1, 2, 3}
+	vbucketIds := []uint16{2}
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
@@ -587,11 +582,15 @@ func TestUPROpen(t *testing.T) {
 		t.Errorf("expected a rwc")
 	}
 
-	reqW := <- rwc.writeCh
+	// ------------------------------------------------------------
+	reqW := <-rwc.writeCh
 	req := &gomemcached.MCRequest{}
 	n, err := req.Receive(bytes.NewReader(reqW.buf), nil)
 	if err != nil || n < 24 {
 		t.Errorf("expected read req to work, err: %v", err)
+	}
+	if req.Opcode != gomemcached.UPR_OPEN {
+		t.Errorf("expected upr-open, got: %#v", req)
 	}
 	reqW.resCh <- RWRes{n: len(reqW.buf), err: nil}
 
@@ -599,15 +598,65 @@ func TestUPROpen(t *testing.T) {
 		Opcode: req.Opcode,
 		Opaque: req.Opaque,
 	}
-	reqR := <- rwc.readCh
+	reqR := <-rwc.readCh
 	copy(reqR.buf, res.HeaderBytes())
 	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
 
+	// ------------------------------------------------------------
+	reqW = <-rwc.writeCh
+	req = &gomemcached.MCRequest{}
+	n, err = req.Receive(bytes.NewReader(reqW.buf), nil)
+	if err != nil || n < 24 {
+		t.Errorf("expected read req to work, err: %v", err)
+	}
+	if req.Opcode != gomemcached.UPR_STREAMREQ {
+		t.Errorf("expected upr-streamreq, got: %#v", req)
+	}
+	if req.VBucket != 2 {
+		t.Errorf("expected vbucketId 2, got: %#v", req)
+	}
+	if req.Opaque != 2 {
+		t.Errorf("expected opaque 2, got: %#v", req)
+	}
+	reqW.resCh <- RWRes{n: len(reqW.buf), err: nil}
+
+	if len(receiver.errs) != 0 {
+		t.Errorf("expected 0 errs")
+	}
+	if receiver.numSetMetaDatas != 0 {
+		t.Errorf("expected 0 numSetMetaDatas")
+	}
+	if receiver.numGetMetaDatas != 1 {
+		t.Errorf("expected 1 numGetMetaDatas")
+	}
+
+	res = &gomemcached.MCResponse{
+		Opcode: req.Opcode,
+		Opaque: req.Opaque,
+		Body:   make([]byte, 16),
+	}
+	binary.BigEndian.PutUint64(res.Body[:8], 102030)
+	binary.BigEndian.PutUint64(res.Body[8:16], 302010)
+	reqR = <-rwc.readCh
+	copy(reqR.buf, res.HeaderBytes())
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, res.Body)
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	// ------------------------------------------------------------
 	err = bds.Close()
 	if err != nil {
 		t.Errorf("expected clean Close(), got err: %v", err)
 	}
 	if len(receiver.errs) != 0 {
 		t.Errorf("expected 0 errs")
+	}
+	if receiver.numSetMetaDatas != 1 {
+		t.Errorf("expected 1 numSetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.numGetMetaDatas != 2 {
+		t.Errorf("expected 2 numGetMetaDatas, got: %#v", receiver)
 	}
 }
