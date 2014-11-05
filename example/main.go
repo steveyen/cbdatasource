@@ -69,19 +69,20 @@ func main() {
 		}
 	}
 
-	var options  *cbdatasource.BucketDataSourceOptions
-	var authFunc cbdatasource.AuthFunc
+	var options cbdatasource.BucketDataSourceOptions =
+		*cbdatasource.DefaultBucketDataSourceOptions
+
+	var authFunc cbdatasource.AuthFunc = nil
 
 	receiver := &ExampleReceiver{}
 
 	b, err := cbdatasource.NewBucketDataSource(serverURLs,
 		*poolName, *bucketName, *bucketUUID,
-		vbucketIdsArr, authFunc, receiver, options)
+		vbucketIdsArr, authFunc, receiver, &options)
 	if err != nil {
 		log.Fatalf(fmt.Sprintf("error: NewBucketDataSource, err: %v", err))
 	}
 
-	receiver.b = b
 	bds = b
 
 	if err = b.Start(); err != nil {
@@ -115,8 +116,6 @@ func reportStats(b cbdatasource.BucketDataSource, force bool) {
 }
 
 type ExampleReceiver struct {
-	b cbdatasource.BucketDataSource
-
 	m sync.Mutex
 
 	seqs map[uint16]uint64 // To track max seq #'s we received per vbucketId.
@@ -125,7 +124,7 @@ type ExampleReceiver struct {
 
 func (r *ExampleReceiver) OnError(err error) {
 	log.Printf("error: %v", err)
-	reportStats(r.b, true)
+	reportStats(bds, true)
 }
 
 func (r *ExampleReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
