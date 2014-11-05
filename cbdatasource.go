@@ -532,7 +532,7 @@ func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 	go func() {
 		atomic.AddUint64(&d.stats.TotWorkerStart, 1)
 
-		ExponentialBackoffLoop("cbdatasource.worker",
+		ExponentialBackoffLoop("cbdatasource.worker-" + server,
 			func() int { return d.worker(server, workerCh) },
 			sleepInitMS, backoffFactor, sleepMaxMS)
 
