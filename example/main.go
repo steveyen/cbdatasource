@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"strings"
@@ -43,12 +44,43 @@ var bucketUUID = flag.String("bucketUUID", "",
 var vbucketIds = flag.String("vbucketIds", "",
 	"comma separated vbucket id numbers; defaults to all vbucket id's")
 
+var optionClusterManagerBackoffFactor =
+	flag.Float64("optionClusterManagerBackoffFactor", 1.5,
+	"factor to increase sleep time between retries to cluster manager")
+var optionClusterManagerSleepInitMS =
+	flag.Int("optionClusterManagerSleepInitMS", 100,
+	"initial sleep time for retries to cluster manager")
+var optionClusterManagerSleepMaxMS =
+	flag.Int("optionClusterManagerSleepMaxMS", 1000,
+	"max sleep time for retries to cluster manager")
+
+var optionDataManagerBackoffFactor =
+	flag.Float64("optionDataManagerBackoffFactor", 1.5,
+	"factor to increase sleep time between retries to data manager")
+var optionDataManagerSleepInitMS =
+	flag.Int("optionDataManagerSleepInitMS", 100,
+	"initial sleep time for retries to data manager")
+var optionDataManagerSleepMaxMS =
+	flag.Int("optionDataManagerSleepMaxMS", 1000,
+	"max sleep time for retries to data manager")
+
+var optionFeedBufferSizeBytes =
+	flag.Int("optionFeedBufferSizeBytes", 20000000,
+	"buffer size for flow control")
+var optionFeedBufferAckThreshold =
+	flag.Float64("optionFeedBufferAckThreshold", 0.2,
+	"percent (0-to-1.0) of buffer size before sending a flow control buffer-ack")
+
 var bds cbdatasource.BucketDataSource
 
 func main() {
 	flag.Parse()
 
 	go dumpOnSignalForPlatform()
+
+	log.Printf("%s started", os.Args[0])
+	flag.VisitAll(func(f *flag.Flag) { log.Printf("  -%s=%s\n", f.Name, f.Value) })
+	log.Printf("  GOMAXPROCS=%d", runtime.GOMAXPROCS(-1))
 
 	serverURLs := []string{*serverURL}
 
@@ -69,8 +101,22 @@ func main() {
 		}
 	}
 
-	var options cbdatasource.BucketDataSourceOptions =
-		*cbdatasource.DefaultBucketDataSourceOptions
+	if *optionFeedBufferSizeBytes < 0 {
+		log.Fatalf("error: optionFeedBufferSizeBytes must be >= 0")
+	}
+
+	options := &cbdatasource.BucketDataSourceOptions{
+		ClusterManagerBackoffFactor: float32(*optionClusterManagerBackoffFactor),
+		ClusterManagerSleepInitMS:   *optionClusterManagerSleepInitMS,
+		ClusterManagerSleepMaxMS:    *optionClusterManagerSleepMaxMS,
+
+		DataManagerBackoffFactor: float32(*optionDataManagerBackoffFactor),
+		DataManagerSleepInitMS:   *optionDataManagerSleepInitMS,
+		DataManagerSleepMaxMS:    *optionDataManagerSleepMaxMS,
+
+		FeedBufferSizeBytes:    uint32(*optionFeedBufferSizeBytes),
+		FeedBufferAckThreshold: float32(*optionFeedBufferAckThreshold),
+	}
 
 	var authFunc cbdatasource.AuthFunc = nil
 
@@ -78,7 +124,7 @@ func main() {
 
 	b, err := cbdatasource.NewBucketDataSource(serverURLs,
 		*poolName, *bucketName, *bucketUUID,
-		vbucketIdsArr, authFunc, receiver, &options)
+		vbucketIdsArr, authFunc, receiver, options)
 	if err != nil {
 		log.Fatalf(fmt.Sprintf("error: NewBucketDataSource, err: %v", err))
 	}
