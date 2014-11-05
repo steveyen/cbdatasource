@@ -284,13 +284,13 @@ type bucketDataSource struct {
 
 	refreshClusterCh chan string
 	refreshWorkersCh chan string
+	closedCh         chan bool
 
 	stats BucketDataSourceStats
 
 	m        sync.Mutex // Protects all the below fields.
 	life     string     // Valid life states: "" (unstarted); "running"; "closed".
 	vbm      *couchbase.VBucketServerMap
-	closedCh chan bool
 }
 
 func NewBucketDataSource(serverURLs []string,
@@ -332,12 +332,12 @@ func (d *bucketDataSource) Start() error {
 	atomic.AddUint64(&d.stats.TotStart, 1)
 
 	d.m.Lock()
-	defer d.m.Unlock()
-
 	if d.life != "" {
+		d.m.Unlock()
 		return fmt.Errorf("Start() called in wrong state: %s", d.life)
 	}
 	d.life = "running"
+	d.m.Unlock()
 
 	backoffFactor := d.options.ClusterManagerBackoffFactor
 	if backoffFactor <= 0.0 {
@@ -1093,19 +1093,17 @@ func (d *bucketDataSource) Stats(dest *BucketDataSourceStats) error {
 
 func (d *bucketDataSource) Close() error {
 	d.m.Lock()
-
 	if d.life != "running" {
 		d.m.Unlock()
 		return fmt.Errorf("Close() called when not in running state: %s", d.life)
 	}
 	d.life = "closed"
+	d.m.Unlock()
 
 	// Closing refreshClusterCh's goroutine closes refreshWorkersCh's
 	// goroutine, which closes every workerCh and then finally closes
 	// the closedCh.
 	close(d.refreshClusterCh)
-
-	d.m.Unlock()
 
 	<-d.closedCh
 
