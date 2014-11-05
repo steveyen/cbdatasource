@@ -44,7 +44,7 @@ type Receiver interface {
 
 	// Invoked by the BucketDataSource when it has received a deletion
 	// or expiration from the data source.  Receiver implementation is
-	// responsible for making its own copies of key and req data.
+	// responsible for making its own copies of key and req.
 	DataDelete(vbucketId uint16, key []byte, seq uint64,
 		r *gomemcached.MCRequest) error
 
@@ -716,6 +716,10 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			atomic.AddUint64(&d.stats.TotWorkerRecvCh, 1)
 
 			if !alive {
+				// If we lost a connection, then maybe a node was rebalanced out,
+				// or failed over, so ask for a cluster refresh just in case.
+				d.kickCluster("recvChDone")
+
 				atomic.AddUint64(&d.stats.TotWorkerRecvChDone, 1)
 				return cleanup(1, nil) // We saw disconnect; assume we made progress.
 			}
@@ -980,7 +984,6 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	case gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION:
 		// This should have been handled already in receiver goroutine.
 		return 0, fmt.Errorf("unexpected data change, res: %#v", res)
-
 
 	default:
 		return 0, fmt.Errorf("unknown opcode, res: %#v", res)
