@@ -236,6 +236,22 @@ func TestNewBucketDataSource(t *testing.T) {
 	}
 }
 
+func TestBucketDataSourceStatsAtomicCopy(t *testing.T) {
+	b := &BucketDataSourceStats{
+		TotSetVBucketMetaDataMarshalErr: 0x1f2f3f4f00001111,
+	}
+	x := b.AtomicCopy()
+	if x == nil || x == b {
+		t.Errorf("no cheating")
+	}
+	if x.TotSetVBucketMetaDataMarshalErr != b.TotSetVBucketMetaDataMarshalErr {
+		t.Errorf("expected copy to work, x: %#v vs b: %#v", x, b)
+	}
+	if x.TotWorkerReceiveOk != b.TotWorkerReceiveOk {
+		t.Errorf("expected copy to work, x: %#v vs b: %#v", x, b)
+	}
+}
+
 func TestImmediateStartClose(t *testing.T) {
 	connectBucket := func(serverURL, poolName, bucketName, bucketUUID string,
 		authFunc AuthFunc) (Bucket, error) {

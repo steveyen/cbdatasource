@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1129,6 +1130,28 @@ func ParseFailOverLog(body []byte) ([][]uint64, error) {
 		j++
 	}
 	return flog, nil
+}
+
+// --------------------------------------------------------------
+
+func (s *BucketDataSourceStats) AtomicCopy() *BucketDataSourceStats {
+	// Using reflection rather than a whole slew of explicit
+	// invocations of atomic.LoadUint64()/StoreUint64()'s.
+	r := &BucketDataSourceStats{}
+	rve := reflect.ValueOf(r).Elem()
+	sve := reflect.ValueOf(s).Elem()
+	svet := sve.Type()
+	for i := 0; i < svet.NumField(); i++ {
+		rvef := rve.Field(i)
+		svef := sve.Field(i)
+		if rvef.CanAddr() && svef.CanAddr() {
+			rvefp := rvef.Addr().Interface()
+			svefp := svef.Addr().Interface()
+			v := atomic.LoadUint64(svefp.(*uint64))
+			atomic.StoreUint64(rvefp.(*uint64), v)
+		}
+	}
+	return r
 }
 
 // --------------------------------------------------------------
