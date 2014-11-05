@@ -20,6 +20,8 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime/pprof"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +40,8 @@ var bucketName = flag.String("bucketName", "default",
 	"bucket name")
 var bucketUUID = flag.String("bucketUUID", "",
 	"bucket UUID")
+var vbucketIds = flag.String("vbucketIds", "",
+	"comma separated vbucket id numbers; defaults to all vbucket id's")
 
 var bds cbdatasource.BucketDataSource
 
@@ -47,7 +51,23 @@ func main() {
 	go dumpOnSignalForPlatform()
 
 	serverURLs := []string{*serverURL}
-	vbucketIds := []uint16(nil) // A nil means get all the vbuckets.
+
+	vbucketIdsArr := []uint16(nil) // A nil means get all the vbuckets.
+	if *vbucketIds != "" {
+		vbucketIdsArr = []uint16{}
+		for _, vbucketIdStr := range strings.Split(*vbucketIds, ",") {
+			if vbucketIdStr != "" {
+				vbucketId, err := strconv.Atoi(vbucketIdStr)
+				if err != nil {
+					log.Fatalf("error: could not parse vbucketId: %s", vbucketIdStr)
+				}
+				vbucketIdsArr = append(vbucketIdsArr, uint16(vbucketId))
+			}
+		}
+		if len(vbucketIdsArr) <= 0 {
+			vbucketIdsArr = nil
+		}
+	}
 
 	var options  *cbdatasource.BucketDataSourceOptions
 	var authFunc cbdatasource.AuthFunc
@@ -56,7 +76,7 @@ func main() {
 
 	b, err := cbdatasource.NewBucketDataSource(serverURLs,
 		*poolName, *bucketName, *bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIdsArr, authFunc, receiver, options)
 	if err != nil {
 		log.Fatalf(fmt.Sprintf("error: NewBucketDataSource, err: %v", err))
 	}
