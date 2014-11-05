@@ -203,38 +203,38 @@ type BucketDataSourceStats struct {
 	TotRefreshWorkerDone uint64
 	TotRefreshWorkerOk   uint64
 
-	TotUPRDataChange                 uint64
-	TotUPRDataChangeMutation         uint64
-	TotUPRDataChangeDeletion         uint64
-	TotUPRDataChangeExpiration       uint64
-	TotUPRDataChangeErr              uint64
-	TotUPRDataChangeOk               uint64
-	TotUPRCloseStream                uint64
-	TotUPRStreamReq                  uint64
-	TotUPRStreamReqWant              uint64
-	TotUPRStreamReqWantAfterRollback uint64
-	TotUPRStreamReqRes               uint64
-	TotUPRStreamReqResStateErr       uint64
-	TotUPRStreamReqResFail           uint64
-	TotUPRStreamReqResRollback       uint64
-	TotUPRStreamReqResRollbackErr    uint64
-	TotUPRStreamReqResKickCluster    uint64
-	TotUPRStreamReqResSuccess        uint64
-	TotUPRStreamReqResSuccessOk      uint64
-	TotUPRStreamReqResFLogErr        uint64
-	TotUPRStreamEnd                  uint64
-	TotUPRStreamEndStateErr          uint64
-	TotUPRStreamEndKickCluster       uint64
-	TotUPRSnapshot                   uint64
-	TotUPRSnapshotStateErr           uint64
-	TotUPRSnapshotStart              uint64
-	TotUPRSnapshotStartErr           uint64
-	TotUPRSnapshotOk                 uint64
-	TotUPRNoop                       uint64
-	TotUPRControl                    uint64
-	TotUPRControlErr                 uint64
-	TotUPRBufferAck                  uint64
-	TotUPRBufferAckErr               uint64
+	TotUPRDataChange                    uint64
+	TotUPRDataChangeMutation            uint64
+	TotUPRDataChangeDeletion            uint64
+	TotUPRDataChangeExpiration          uint64
+	TotUPRDataChangeErr                 uint64
+	TotUPRDataChangeOk                  uint64
+	TotUPRCloseStream                   uint64
+	TotUPRStreamReq                     uint64
+	TotUPRStreamReqWant                 uint64
+	TotUPRStreamReqRes                  uint64
+	TotUPRStreamReqResStateErr          uint64
+	TotUPRStreamReqResFail              uint64
+	TotUPRStreamReqResRollback          uint64
+	TotUPRStreamReqResRollbackErr       uint64
+	TotUPRStreamReqResWantAfterRollback uint64
+	TotUPRStreamReqResKickCluster       uint64
+	TotUPRStreamReqResSuccess           uint64
+	TotUPRStreamReqResSuccessOk         uint64
+	TotUPRStreamReqResFLogErr           uint64
+	TotUPRStreamEnd                     uint64
+	TotUPRStreamEndStateErr             uint64
+	TotUPRStreamEndKickCluster          uint64
+	TotUPRSnapshot                      uint64
+	TotUPRSnapshotStateErr              uint64
+	TotUPRSnapshotStart                 uint64
+	TotUPRSnapshotStartErr              uint64
+	TotUPRSnapshotOk                    uint64
+	TotUPRNoop                          uint64
+	TotUPRControl                       uint64
+	TotUPRControlErr                    uint64
+	TotUPRBufferAck                     uint64
+	TotUPRBufferAckErr                  uint64
 
 	TotWantClosingVBucketErr uint64
 
@@ -852,7 +852,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 				}
 
 				currVBucketIds[vbucketId] = "requested"
-				atomic.AddUint64(&d.stats.TotUPRStreamReqWantAfterRollback, 1)
+				atomic.AddUint64(&d.stats.TotUPRStreamReqResWantAfterRollback, 1)
 				err = d.sendStreamReq(sendCh, vbucketId)
 				if err != nil {
 					return 0, err
