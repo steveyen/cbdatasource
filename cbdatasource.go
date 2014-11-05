@@ -402,7 +402,7 @@ func (d *bucketDataSource) refreshCluster() int {
 		d.vbm = vbm
 		d.m.Unlock()
 
-	refreshWorkerLoop:
+	refreshWorkersLoop:
 		for {
 			d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
 			atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkers, 1)
@@ -411,7 +411,6 @@ func (d *bucketDataSource) refreshCluster() int {
 			if !alive {                           // Or, if we're closed then shutdown.
 				return -1
 			}
-
 			if !d.isRunning() {
 				return -1
 			}
@@ -420,7 +419,7 @@ func (d *bucketDataSource) refreshCluster() int {
 			// keep with this inner loop and not have to restart all
 			// the way at the top / retrieve a new cluster map, etc.
 			if reason != "new-worker" {
-				break refreshWorkerLoop
+				break refreshWorkersLoop
 			}
 		}
 
@@ -707,7 +706,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				recvBytesTotal = 0
 			}
 
-		case wantVBucketIdsArr, alive := <-workerCh:
+		case wantVBucketIds, alive := <-workerCh:
 			atomic.AddUint64(&d.stats.TotRefreshWorker, 1)
 
 			if !alive {
@@ -715,40 +714,10 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				return cleanup(-1, nil) // We've been asked to shutdown.
 			}
 
-			wantVBucketIds := map[uint16]bool{}
-			for _, wantVBucketId := range wantVBucketIdsArr {
-				wantVBucketIds[wantVBucketId] = true
-			}
-
-			for currVBucketId, state := range currVBucketIds {
-				if !wantVBucketIds[currVBucketId] {
-					if state != "" && state != "closing" {
-						currVBucketIds[currVBucketId] = "closing"
-						atomic.AddUint64(&d.stats.TotUPRCloseStream, 1)
-						sendCh <- &gomemcached.MCRequest{
-							Opcode:  gomemcached.UPR_CLOSESTREAM,
-							VBucket: currVBucketId,
-							Opaque:  uint32(currVBucketId),
-						}
-					} // Else, state of "" or "closing", so no-op.
-				}
-			}
-
-			for wantVBucketId, _ := range wantVBucketIds {
-				state := currVBucketIds[wantVBucketId]
-				if state == "closing" {
-					atomic.AddUint64(&d.stats.TotWantClosingVBucketErr, 1)
-					return cleanup(0, fmt.Errorf("wanting a closing vbucket: %d",
-						wantVBucketId))
-				}
-				if state == "" {
-					currVBucketIds[wantVBucketId] = "requested"
-					atomic.AddUint64(&d.stats.TotUPRStreamReqWant, 1)
-					err := d.sendStreamReq(sendCh, wantVBucketId)
-					if err != nil {
-						return cleanup(0, err)
-					}
-				} // Else, state of "requested" or "running", so no-op.
+			progress, err :=
+				d.refreshWorker(sendCh, currVBucketIds, wantVBucketIds)
+			if err != nil {
+				return cleanup(progress, err)
 			}
 
 			atomic.AddUint64(&d.stats.TotRefreshWorkerOk, 1)
@@ -756,6 +725,50 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}
 
 	return cleanup(-1, nil) // Unreached.
+}
+
+func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
+	currVBucketIds map[uint16]string, wantVBucketIdsArr []uint16) (
+	progress int, err error) {
+	// Convert to map for faster lookup.
+	wantVBucketIds := map[uint16]bool{}
+	for _, wantVBucketId := range wantVBucketIdsArr {
+		wantVBucketIds[wantVBucketId] = true
+	}
+
+	for currVBucketId, state := range currVBucketIds {
+		if !wantVBucketIds[currVBucketId] {
+			if state != "" && state != "closing" {
+				currVBucketIds[currVBucketId] = "closing"
+				atomic.AddUint64(&d.stats.TotUPRCloseStream, 1)
+				sendCh <- &gomemcached.MCRequest{
+					Opcode:  gomemcached.UPR_CLOSESTREAM,
+					VBucket: currVBucketId,
+					Opaque:  uint32(currVBucketId),
+				}
+			} // Else, state of "" or "closing", so no-op.
+		}
+	}
+
+	for wantVBucketId, _ := range wantVBucketIds {
+		state := currVBucketIds[wantVBucketId]
+		if state == "closing" {
+			// A UPR_CLOSESTREAM request is already on the wire, so
+			// error rather than have complex compensation logic.
+			atomic.AddUint64(&d.stats.TotWantClosingVBucketErr, 1)
+			return 0, fmt.Errorf("want closing vbucket: %d", wantVBucketId)
+		}
+		if state == "" {
+			currVBucketIds[wantVBucketId] = "requested"
+			atomic.AddUint64(&d.stats.TotUPRStreamReqWant, 1)
+			err := d.sendStreamReq(sendCh, wantVBucketId)
+			if err != nil {
+				return 0, err
+			}
+		} // Else, state of "requested" or "running", so no-op.
+	}
+
+	return 0, nil
 }
 
 func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
