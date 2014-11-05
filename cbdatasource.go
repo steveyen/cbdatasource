@@ -81,6 +81,9 @@ type BucketDataSource interface {
 	// after which calls will be made to Receiver methods.
 	Start() error
 
+	// Force a cluster map refresh.  A reason string of "" is valid.
+	Kick(reason string) error
+
 	// Returns an immutable snapshot of stats.
 	Stats(dest *BucketDataSourceStats) error
 
@@ -158,6 +161,11 @@ type BucketDataSourceStats struct {
 	TotRefreshClusterConnectBucketOk  uint64
 	TotRefreshClusterVBMNilErr        uint64
 	TotRefreshClusterKickWorkers      uint64
+	TotRefreshClusterKickWorkersOk    uint64
+	TotRefreshClusterAwokenClosed     uint64
+	TotRefreshClusterAwokenStopped    uint64
+	TotRefreshClusterAwokenRestart    uint64
+	TotRefreshClusterAwoken           uint64
 	TotRefreshClusterDone             uint64
 
 	TotRefreshWorkers                uint64
@@ -218,13 +226,13 @@ type BucketDataSourceStats struct {
 	TotUPRStreamReqResRollback          uint64
 	TotUPRStreamReqResRollbackErr       uint64
 	TotUPRStreamReqResWantAfterRollback uint64
-	TotUPRStreamReqResKickCluster       uint64
+	TotUPRStreamReqResKick              uint64
 	TotUPRStreamReqResSuccess           uint64
 	TotUPRStreamReqResSuccessOk         uint64
 	TotUPRStreamReqResFLogErr           uint64
 	TotUPRStreamEnd                     uint64
 	TotUPRStreamEndStateErr             uint64
-	TotUPRStreamEndKickCluster          uint64
+	TotUPRStreamEndKick                 uint64
 	TotUPRSnapshot                      uint64
 	TotUPRSnapshotStateErr              uint64
 	TotUPRSnapshotStart                 uint64
@@ -405,14 +413,17 @@ func (d *bucketDataSource) refreshCluster() int {
 
 	refreshWorkersLoop:
 		for {
-			d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
 			atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkers, 1)
+			d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
+			atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkersOk, 1)
 
 			reason, alive := <-d.refreshClusterCh // Wait for a refresh cluster kick.
 			if !alive {                           // Or, if we're closed then shutdown.
+				atomic.AddUint64(&d.stats.TotRefreshClusterAwokenClosed, 1)
 				return -1
 			}
 			if !d.isRunning() {
+				atomic.AddUint64(&d.stats.TotRefreshClusterAwokenStopped, 1)
 				return -1
 			}
 
@@ -420,8 +431,11 @@ func (d *bucketDataSource) refreshCluster() int {
 			// keep with this inner loop and not have to restart all
 			// the way at the top / retrieve a new cluster map, etc.
 			if reason != "new-worker" {
+				atomic.AddUint64(&d.stats.TotRefreshClusterAwokenRestart, 1)
 				break refreshWorkersLoop
 			}
+
+			atomic.AddUint64(&d.stats.TotRefreshClusterAwoken, 1)
 		}
 
 		return 1 // We had progress, so restart at the first serverURL.
@@ -704,7 +718,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	// Track received bytes in case we need to buffer-ack.
 	recvBytesTotal := uint32(0)
 
-	d.kickCluster("new-worker")
+	d.Kick("new-worker")
 
 	for {
 		select {
@@ -718,7 +732,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			if !alive {
 				// If we lost a connection, then maybe a node was rebalanced out,
 				// or failed over, so ask for a cluster refresh just in case.
-				d.kickCluster("recvChDone")
+				d.Kick("recvChDone")
 
 				atomic.AddUint64(&d.stats.TotWorkerRecvChDone, 1)
 				return cleanup(1, nil) // We saw disconnect; assume we made progress.
@@ -859,8 +873,8 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 				}
 			} else {
 				// Maybe the vbucket moved, so kick off a cluster refresh.
-				atomic.AddUint64(&d.stats.TotUPRStreamReqResKickCluster, 1)
-				d.kickCluster("stream-req-error")
+				atomic.AddUint64(&d.stats.TotUPRStreamReqResKick, 1)
+				d.Kick("stream-req-error")
 			}
 		} else { // SUCCESS case.
 			atomic.AddUint64(&d.stats.TotUPRStreamReqResSuccess, 1)
@@ -906,8 +920,8 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		// were trying to close.  Maybe the vbucket moved, so
 		// kick off a cluster refresh.
 		if vbucketIdState != "closing" {
-			atomic.AddUint64(&d.stats.TotUPRStreamEndKickCluster, 1)
-			d.kickCluster("stream-end")
+			atomic.AddUint64(&d.stats.TotUPRStreamEndKick, 1)
+			d.Kick("stream-end")
 		}
 
 	case gomemcached.UPR_SNAPSHOT:
@@ -1100,7 +1114,7 @@ func (d *bucketDataSource) Close() error {
 	return nil
 }
 
-func (d *bucketDataSource) kickCluster(reason string) {
+func (d *bucketDataSource) Kick(reason string) error {
 	go func() {
 		d.m.Lock()
 		defer d.m.Unlock()
@@ -1111,6 +1125,8 @@ func (d *bucketDataSource) kickCluster(reason string) {
 
 		d.refreshClusterCh <- reason
 	}()
+
+	return nil
 }
 
 // --------------------------------------------------------------
