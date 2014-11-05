@@ -601,7 +601,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			if err != nil {
 				atomic.AddUint64(&d.stats.TotWorkerTransmitErr, 1)
 				close(sendErrCh)
-				d.receiver.OnError(err)
+				d.receiver.OnError(fmt.Errorf("client.Transmit, err: %v", err))
 				return
 			}
 			atomic.AddUint64(&d.stats.TotWorkerTransmitOk, 1)
@@ -621,7 +621,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			if err != nil {
 				close(recvCh)
 				atomic.AddUint64(&d.stats.TotWorkerReceiveErr, 1)
-				d.receiver.OnError(err)
+				d.receiver.OnError(fmt.Errorf("pkt.Receive, err: %v", err))
 				return
 			}
 			atomic.AddUint64(&d.stats.TotWorkerReceiveOk, 1)
