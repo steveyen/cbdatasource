@@ -49,8 +49,17 @@ func main() {
 	serverURLs := []string{*serverURL}
 	vbucketIds := []uint16(nil) // A nil means get all the vbuckets.
 
+	options := &cbdatasource.BucketDataSourceOptions{
+		ClusterManagerBackoffFactor: 1.5,
+		ClusterManagerSleepInitMS:   100,
+		ClusterManagerSleepMaxMS:    1000,
+
+		DataManagerBackoffFactor: 1.2,
+		DataManagerSleepInitMS:   2000,
+		DataManagerSleepMaxMS:    5000,
+	}
+
 	var authFunc cbdatasource.AuthFunc
-	var options *cbdatasource.BucketDataSourceOptions
 
 	receiver := &ExampleReceiver{}
 
