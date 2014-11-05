@@ -33,6 +33,9 @@ import (
 // Simple, memory-only sample program that uses the cbdatasource API's
 // to get data from a couchbase cluster using DCP.
 
+var verbose = flag.Int("verbose", 1,
+	"verbose'ness of logging, where 0 is no logging")
+
 var serverURL = flag.String("serverURL", "http://localhost:8091",
 	"couchbase server URL")
 var poolName = flag.String("poolName", "default",
@@ -78,9 +81,11 @@ func main() {
 
 	go dumpOnSignalForPlatform()
 
-	log.Printf("%s started", os.Args[0])
-	flag.VisitAll(func(f *flag.Flag) { log.Printf("  -%s=%s\n", f.Name, f.Value) })
-	log.Printf("  GOMAXPROCS=%d", runtime.GOMAXPROCS(-1))
+	if *verbose > 0 {
+		log.Printf("%s started", os.Args[0])
+		flag.VisitAll(func(f *flag.Flag) { log.Printf("  -%s=%s\n", f.Name, f.Value) })
+		log.Printf("  GOMAXPROCS=%d", runtime.GOMAXPROCS(-1))
+	}
 
 	serverURLs := []string{*serverURL}
 
@@ -135,7 +140,9 @@ func main() {
 		log.Fatalf(fmt.Sprintf("error: Start, err: %v", err))
 	}
 
-	log.Printf("started bucket data source: %v", b)
+	if *verbose > 0 {
+		log.Printf("started bucket data source: %v", b)
+	}
 
 	for {
 		time.Sleep(1000 * time.Millisecond)
@@ -148,6 +155,10 @@ var lastStats = &cbdatasource.BucketDataSourceStats{}
 var currStats = &cbdatasource.BucketDataSourceStats{}
 
 func reportStats(b cbdatasource.BucketDataSource, force bool) {
+	if *verbose <= 0 {
+		return
+	}
+
 	mutexStats.Lock()
 	defer mutexStats.Unlock()
 
@@ -169,22 +180,28 @@ type ExampleReceiver struct {
 }
 
 func (r *ExampleReceiver) OnError(err error) {
-	log.Printf("error: %v", err)
+	if *verbose > 0 {
+		log.Printf("error: %v", err)
+	}
 	reportStats(bds, true)
 }
 
 func (r *ExampleReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
-	res *gomemcached.MCResponse) error {
-	log.Printf("data-update: vbucketId: %d, key: %s, seq: %x, res: %#v",
-		vbucketId, key, seq, res)
+	req *gomemcached.MCRequest) error {
+	if *verbose > 1 {
+		log.Printf("data-update: vbucketId: %d, key: %s, seq: %x, req: %#v",
+			vbucketId, key, seq, req)
+	}
 	r.updateSeq(vbucketId, seq)
 	return nil
 }
 
 func (r *ExampleReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
-	res *gomemcached.MCResponse) error {
-	log.Printf("data-delete: vbucketId: %d, key: %s, seq: %x, res: %#v",
-		vbucketId, key, seq, res)
+	req *gomemcached.MCRequest) error {
+	if *verbose > 1 {
+		log.Printf("data-delete: vbucketId: %d, key: %s, seq: %x, req: %#v",
+			vbucketId, key, seq, req)
+	}
 	r.updateSeq(vbucketId, seq)
 	return nil
 }
@@ -203,13 +220,17 @@ func (r *ExampleReceiver) updateSeq(vbucketId uint16, seq uint64) {
 
 func (r *ExampleReceiver) SnapshotStart(vbucketId uint16,
 	snapStart, snapEnd uint64, snapType uint32) error {
-	log.Printf("snapshot-start: vbucketId: %d, snapStart: %x, snapEnd: %x, snapType: %x",
-		vbucketId, snapStart, snapEnd, snapType)
+	if *verbose > 1 {
+		log.Printf("snapshot-start: vbucketId: %d, snapStart: %x, snapEnd: %x, snapType: %x",
+			vbucketId, snapStart, snapEnd, snapType)
+	}
 	return nil
 }
 
 func (r *ExampleReceiver) SetMetaData(vbucketId uint16, value []byte) error {
-	log.Printf("set-metadata: vbucketId: %d, value: %s", vbucketId, value)
+	if *verbose > 1 {
+		log.Printf("set-metadata: vbucketId: %d, value: %s", vbucketId, value)
+	}
 
 	r.m.Lock()
 	defer r.m.Unlock()
@@ -224,7 +245,9 @@ func (r *ExampleReceiver) SetMetaData(vbucketId uint16, value []byte) error {
 
 func (r *ExampleReceiver) GetMetaData(vbucketId uint16) (
 	value []byte, lastSeq uint64, err error) {
-	log.Printf("get-metadata: vbucketId: %d", vbucketId)
+	if *verbose > 1 {
+		log.Printf("get-metadata: vbucketId: %d", vbucketId)
+	}
 
 	r.m.Lock()
 	defer r.m.Unlock()
@@ -242,7 +265,9 @@ func (r *ExampleReceiver) GetMetaData(vbucketId uint16) (
 }
 
 func (r *ExampleReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
-	log.Printf("rollback: vbucketId: %d, rollbackSeq: %x", vbucketId, rollbackSeq)
+	if *verbose > 0 {
+		log.Printf("rollback: vbucketId: %d, rollbackSeq: %x", vbucketId, rollbackSeq)
+	}
 
 	return fmt.Errorf("unimpl-rollback")
 }

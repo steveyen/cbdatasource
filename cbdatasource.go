@@ -37,14 +37,16 @@ type Receiver interface {
 	OnError(error)
 
 	// Invoked by the BucketDataSource when it has received a mutation
-	// from the data source.
+	// from the data source.  Receiver implementation is responsible
+	// for making its own copies of key and req data.
 	DataUpdate(vbucketId uint16, key []byte, seq uint64,
-		r *gomemcached.MCResponse) error
+		r *gomemcached.MCRequest) error
 
 	// Invoked by the BucketDataSource when it has received a deletion
-	// or expiration from the data source.
+	// or expiration from the data source.  Receiver implementation is
+	// responsible for making its own copies of key and req data.
 	DataDelete(vbucketId uint16, key []byte, seq uint64,
-		r *gomemcached.MCResponse) error
+		r *gomemcached.MCRequest) error
 
 	// An advisory callback invoked by the BucketDataSource when it
 	// has received a start snapshot message from the data source.
@@ -202,7 +204,6 @@ type BucketDataSourceStats struct {
 	TotRefreshWorkerOk   uint64
 
 	TotUPRDataChange                 uint64
-	TotUPRDataChangeStateErr         uint64
 	TotUPRDataChangeMutation         uint64
 	TotUPRDataChangeDeletion         uint64
 	TotUPRDataChangeExpiration       uint64
@@ -597,6 +598,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}
 	atomic.AddUint64(&d.stats.TotWorkerUPROpenOk, 1)
 
+	ackBytes :=
+		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
+
 	sendEndCh := make(chan bool)
 	sendCh := make(chan *gomemcached.MCRequest)
 	recvCh := make(chan *gomemcached.MCResponse)
@@ -650,14 +654,45 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				return
 			}
 			atomic.AddUint64(&d.stats.TotWorkerReceiveOk, 1)
-			recvCh <- &gomemcached.MCResponse{
-				Opcode: pkt.Opcode,
-				Cas:    pkt.Cas,
-				Opaque: pkt.Opaque,
-				Status: gomemcached.Status(pkt.VBucket),
-				Extras: pkt.Extras,
-				Key:    pkt.Key,
-				Body:   pkt.Body,
+
+			if pkt.Opcode == gomemcached.UPR_MUTATION ||
+				pkt.Opcode == gomemcached.UPR_DELETION ||
+				pkt.Opcode == gomemcached.UPR_EXPIRATION {
+				atomic.AddUint64(&d.stats.TotUPRDataChange, 1)
+
+				vbucketId := pkt.VBucket
+
+				seq := binary.BigEndian.Uint64(pkt.Extras[:8])
+
+				if pkt.Opcode == gomemcached.UPR_MUTATION {
+					atomic.AddUint64(&d.stats.TotUPRDataChangeMutation, 1)
+					err = d.receiver.DataUpdate(vbucketId, pkt.Key, seq, &pkt)
+				} else {
+					if pkt.Opcode == gomemcached.UPR_DELETION {
+						atomic.AddUint64(&d.stats.TotUPRDataChangeDeletion, 1)
+					} else {
+						atomic.AddUint64(&d.stats.TotUPRDataChangeExpiration, 1)
+					}
+					err = d.receiver.DataDelete(vbucketId, pkt.Key, seq, &pkt)
+				}
+
+				if err != nil {
+					atomic.AddUint64(&d.stats.TotUPRDataChangeErr, 1)
+					d.receiver.OnError(fmt.Errorf("DataChange, err: %v", err))
+					return
+				}
+
+				atomic.AddUint64(&d.stats.TotUPRDataChangeOk, 1)
+			} else {
+				recvCh <- &gomemcached.MCResponse{
+					Opcode: pkt.Opcode,
+					Cas:    pkt.Cas,
+					Opaque: pkt.Opaque,
+					Status: gomemcached.Status(pkt.VBucket),
+					Extras: pkt.Extras,
+					Key:    pkt.Key,
+					Body:   pkt.Body,
+				}
 			}
 		}
 	}()
@@ -668,8 +703,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 	// Track received bytes in case we need to buffer-ack.
 	recvBytesTotal := uint32(0)
-	ackBytes :=
-		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
 
 	d.kickCluster("new-worker")
 
@@ -775,38 +808,6 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	currVBucketIds map[uint16]string, res *gomemcached.MCResponse) (
 	progress int, err error) {
 	switch res.Opcode {
-	case gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION:
-		atomic.AddUint64(&d.stats.TotUPRDataChange, 1)
-
-		vbucketId := uint16(res.Status)
-		vbucketIdState := currVBucketIds[vbucketId]
-
-		if vbucketIdState != "running" {
-			atomic.AddUint64(&d.stats.TotUPRDataChangeStateErr, 1)
-			return 0, fmt.Errorf("worker non-running,"+
-				" vbucketId: %d, vbucketIdState: %s, res: %#v",
-				vbucketId, vbucketIdState, res)
-		}
-
-		seq := binary.BigEndian.Uint64(res.Extras[:8])
-		if res.Opcode == gomemcached.UPR_MUTATION {
-			atomic.AddUint64(&d.stats.TotUPRDataChangeMutation, 1)
-			err = d.receiver.DataUpdate(vbucketId, res.Key, seq, res)
-		} else {
-			if res.Opcode == gomemcached.UPR_EXPIRATION {
-				atomic.AddUint64(&d.stats.TotUPRDataChangeDeletion, 1)
-			} else {
-				atomic.AddUint64(&d.stats.TotUPRDataChangeExpiration, 1)
-			}
-			err = d.receiver.DataDelete(vbucketId, res.Key, seq, res)
-		}
-		if err != nil {
-			atomic.AddUint64(&d.stats.TotUPRDataChangeErr, 1)
-			return 0, err
-		}
-
-		atomic.AddUint64(&d.stats.TotUPRDataChangeOk, 1)
-
 	case gomemcached.UPR_NOOP:
 		atomic.AddUint64(&d.stats.TotUPRNoop, 1)
 		sendCh <- &gomemcached.MCRequest{
@@ -975,6 +976,11 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		// Shouldn't see this, as producers (oddly!) respond
 		// with a STREAM_END to our CLOSE_STREAM request.
 		return 0, fmt.Errorf("unexpected upr_closestream, res: %#v", res)
+
+	case gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION:
+		// This should have been handled already in receiver goroutine.
+		return 0, fmt.Errorf("unexpected data change, res: %#v", res)
+
 
 	default:
 		return 0, fmt.Errorf("unknown opcode, res: %#v", res)

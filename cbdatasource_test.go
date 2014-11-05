@@ -48,7 +48,6 @@ type TestMutation struct {
 	vbucketId uint16
 	key       []byte
 	seq       uint64
-	res       *gomemcached.MCResponse
 }
 
 type TestReceiver struct {
@@ -74,7 +73,7 @@ func (r *TestReceiver) OnError(err error) {
 }
 
 func (r *TestReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
-	res *gomemcached.MCResponse) error {
+	req *gomemcached.MCRequest) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 
@@ -83,13 +82,12 @@ func (r *TestReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
 		vbucketId: vbucketId,
 		key:       key,
 		seq:       seq,
-		res:       res,
 	})
 	return nil
 }
 
 func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
-	res *gomemcached.MCResponse) error {
+	req *gomemcached.MCRequest) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 
@@ -98,7 +96,6 @@ func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
 		vbucketId: vbucketId,
 		key:       key,
 		seq:       seq,
-		res:       res,
 	})
 	return nil
 }
