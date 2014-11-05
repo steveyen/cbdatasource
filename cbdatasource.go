@@ -234,7 +234,6 @@ type BucketDataSourceStats struct {
 	TotUPRControlErr                 uint64
 	TotUPRBufferAck                  uint64
 	TotUPRBufferAckErr               uint64
-	TotUPRFlush                      uint64
 
 	TotWantClosingVBucketErr uint64
 
@@ -951,25 +950,21 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			return 0, fmt.Errorf("failed bufferack: %#v", res)
 		}
 
-	case gomemcached.UPR_FLUSH:
-		atomic.AddUint64(&d.stats.TotUPRFlush, 1)
-		panic(fmt.Sprintf("unimplemented flush, res: %#v", res))
-
 	case gomemcached.UPR_OPEN:
 		// Opening was long ago, so we should not see UPR_OPEN responses.
-		panic(fmt.Sprintf("unexpected upr_open, res: %#v", res))
+		return 0, fmt.Errorf("unexpected upr_open, res: %#v", res)
 
 	case gomemcached.UPR_ADDSTREAM:
 		// This normally comes from ns-server / dcp-migrator.
-		panic(fmt.Sprintf("unexpected upr_addstream, res: %#v", res))
+		return 0, fmt.Errorf("unexpected upr_addstream, res: %#v", res)
 
 	case gomemcached.UPR_CLOSESTREAM:
 		// Shouldn't see this, as producers (oddly!) respond
 		// with a STREAM_END to our CLOSE_STREAM request.
-		panic(fmt.Sprintf("unexpected upr_closestream, res: %#v", res))
+		return 0, fmt.Errorf("unexpected upr_closestream, res: %#v", res)
 
 	default:
-		panic(fmt.Sprintf("unknown opcode, res: %#v", res))
+		return 0, fmt.Errorf("unknown opcode, res: %#v", res)
 	}
 
 	return 1, nil
