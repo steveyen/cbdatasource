@@ -234,16 +234,22 @@ func TestNewBucketDataSource(t *testing.T) {
 	if err != nil || bds == nil {
 		t.Errorf("expected no err")
 	}
+	bdss := &BucketDataSourceStats{}
+	err = bds.Stats(bdss)
+	if err != nil {
+		t.Errorf("expected no err on Stats()")
+	}
+	if !reflect.DeepEqual(bdss, &BucketDataSourceStats{}) {
+		t.Errorf("expected zeroed Stats")
+	}
 }
 
-func TestBucketDataSourceStatsAtomicCopy(t *testing.T) {
+func TestBucketDataSourceStatsAtomicCopyTo(t *testing.T) {
 	b := &BucketDataSourceStats{
 		TotSetVBucketMetaDataMarshalErr: 0x1f2f3f4f00001111,
 	}
-	x := b.AtomicCopy()
-	if x == nil || x == b {
-		t.Errorf("no cheating")
-	}
+	x := &BucketDataSourceStats{}
+	b.AtomicCopyTo(x)
 	if x.TotSetVBucketMetaDataMarshalErr != b.TotSetVBucketMetaDataMarshalErr {
 		t.Errorf("expected copy to work, x: %#v vs b: %#v", x, b)
 	}
@@ -285,21 +291,60 @@ func TestImmediateStartClose(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected err on Close before Start")
 	}
+
+	// ------------------------------------------------------------
 	err = bds.Start()
 	if err != nil {
 		t.Errorf("expected no err on Start")
 	}
+	bdss := &BucketDataSourceStats{}
+	err = bds.Stats(bdss)
+	if err != nil {
+		t.Errorf("expected no err on Stats()")
+	}
+	if !reflect.DeepEqual(bdss, &BucketDataSourceStats{
+		TotStart: 1,
+	}) {
+		t.Errorf("expected same stats")
+	}
+
+	// ------------------------------------------------------------
 	err = bds.Start()
 	if err == nil {
 		t.Errorf("expected err on re-Start")
 	}
+	err = bds.Stats(bdss)
+	if err != nil {
+		t.Errorf("expected no err on Stats()")
+	}
+	if !reflect.DeepEqual(bdss, &BucketDataSourceStats{
+		TotStart: 2,
+	}) {
+		t.Errorf("expected same stats")
+	}
+
+	// ------------------------------------------------------------
 	err = bds.Close()
 	if err != nil {
 		t.Errorf("expected no err on Close")
 	}
+	err = bds.Stats(bdss)
+	if err != nil {
+		t.Errorf("expected no err on Stats()")
+	}
+	if !reflect.DeepEqual(bdss, &BucketDataSourceStats{
+		TotStart: 2,
+		TotRefreshCluster: 1,
+		TotRefreshClusterDone: 1,
+		TotRefreshWorkersDone: 1,
+	}) {
+		t.Errorf("expected same stats, got: %#v", bdss)
+	}
+
+	// ------------------------------------------------------------
 	err = bds.Close()
 	if err == nil {
-		t.Errorf("expected err on Close")
+		t.Errorf("expected err on re-Close")
 	}
 }
 

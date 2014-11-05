@@ -80,7 +80,7 @@ type BucketDataSource interface {
 	Start() error
 
 	// Returns an immutable snapshot of stats.
-	Stats() BucketDataSourceStats
+	Stats(dest *BucketDataSourceStats) error
 
 	// Stops the underlying goroutines.
 	Close() error
@@ -1014,8 +1014,9 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 	return nil
 }
 
-func (d *bucketDataSource) Stats() BucketDataSourceStats {
-	return BucketDataSourceStats{}
+func (d *bucketDataSource) Stats(dest *BucketDataSourceStats) error {
+	d.stats.AtomicCopyTo(dest)
+	return nil
 }
 
 func (d *bucketDataSource) Close() error {
@@ -1134,10 +1135,9 @@ func ParseFailOverLog(body []byte) ([][]uint64, error) {
 
 // --------------------------------------------------------------
 
-func (s *BucketDataSourceStats) AtomicCopy() *BucketDataSourceStats {
+func (s *BucketDataSourceStats) AtomicCopyTo(r *BucketDataSourceStats) {
 	// Using reflection rather than a whole slew of explicit
 	// invocations of atomic.LoadUint64()/StoreUint64()'s.
-	r := &BucketDataSourceStats{}
 	rve := reflect.ValueOf(r).Elem()
 	sve := reflect.ValueOf(s).Elem()
 	svet := sve.Type()
@@ -1151,7 +1151,6 @@ func (s *BucketDataSourceStats) AtomicCopy() *BucketDataSourceStats {
 			atomic.StoreUint64(rvefp.(*uint64), v)
 		}
 	}
-	return r
 }
 
 // --------------------------------------------------------------
