@@ -179,13 +179,16 @@ type BucketDataSourceStats struct {
 	TotWorkerUPROpenErr uint64
 	TotWorkerUPROpenOk  uint64
 
-	TotWorkerTransmit    uint64
-	TotWorkerTransmitErr uint64
-	TotWorkerTransmitOk  uint64
+	TotWorkerTransmitStart uint64
+	TotWorkerTransmit      uint64
+	TotWorkerTransmitErr   uint64
+	TotWorkerTransmitOk    uint64
+	TotWorkerTransmitDone  uint64
 
-	TotWorkerReceive    uint64
-	TotWorkerReceiveErr uint64
-	TotWorkerReceiveOk  uint64
+	TotWorkerReceiveStart uint64
+	TotWorkerReceive      uint64
+	TotWorkerReceiveErr   uint64
+	TotWorkerReceiveOk    uint64
 
 	TotWorkerBufferAck     uint64
 	TotWorkerSendErrCh     uint64
@@ -532,7 +535,7 @@ func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 	go func() {
 		atomic.AddUint64(&d.stats.TotWorkerStart, 1)
 
-		ExponentialBackoffLoop("cbdatasource.worker-" + server,
+		ExponentialBackoffLoop("cbdatasource.worker-"+server,
 			func() int { return d.worker(server, workerCh) },
 			sleepInitMS, backoffFactor, sleepMaxMS)
 
@@ -596,6 +599,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}
 
 	go func() { // Sender goroutine.
+		atomic.AddUint64(&d.stats.TotWorkerTransmitStart, 1)
 		for msg := range sendCh {
 			atomic.AddUint64(&d.stats.TotWorkerTransmit, 1)
 			err := client.Transmit(msg)
@@ -607,9 +611,12 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			}
 			atomic.AddUint64(&d.stats.TotWorkerTransmitOk, 1)
 		}
+		atomic.AddUint64(&d.stats.TotWorkerTransmitDone, 1)
 	}()
 
 	go func() { // Receiver goroutine.
+		atomic.AddUint64(&d.stats.TotWorkerReceiveStart, 1)
+
 		var hdr [gomemcached.HDR_LEN]byte
 		var pkt gomemcached.MCRequest
 

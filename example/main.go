@@ -12,10 +12,16 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"reflect"
+	"runtime/pprof"
 	"sync"
+	"time"
 
 	"github.com/couchbase/gomemcached"
 	"github.com/steveyen/cbdatasource"
@@ -33,7 +39,13 @@ var bucketName = flag.String("bucketName", "default",
 var bucketUUID = flag.String("bucketUUID", "",
 	"bucket UUID")
 
+var bds cbdatasource.BucketDataSource
+
 func main() {
+	flag.Parse()
+
+	go dumpOnSignalForPlatform()
+
 	serverURLs := []string{*serverURL}
 	vbucketIds := []uint16(nil) // A nil means get all the vbuckets.
 
@@ -49,16 +61,42 @@ func main() {
 		log.Fatalf(fmt.Sprintf("error: NewBucketDataSource, err: %v", err))
 	}
 
+	receiver.b = b
+	bds = b
+
 	if err = b.Start(); err != nil {
 		log.Fatalf(fmt.Sprintf("error: Start, err: %v", err))
 	}
 
 	log.Printf("started bucket data source: %v", b)
 
-	select {}
+	for {
+		time.Sleep(1000 * time.Millisecond)
+		reportStats(b, false)
+	}
+}
+
+var mutexStats sync.Mutex
+var lastStats = &cbdatasource.BucketDataSourceStats{}
+var currStats = &cbdatasource.BucketDataSourceStats{}
+
+func reportStats(b cbdatasource.BucketDataSource, force bool) {
+	mutexStats.Lock()
+	defer mutexStats.Unlock()
+
+	b.Stats(currStats)
+	if force || !reflect.DeepEqual(lastStats, currStats) {
+		buf, err := json.Marshal(currStats)
+		if err == nil {
+			log.Printf("%s", string(buf))
+		}
+		lastStats, currStats = currStats, lastStats
+	}
 }
 
 type ExampleReceiver struct {
+	b cbdatasource.BucketDataSource
+
 	m sync.Mutex
 
 	seqs map[uint16]uint64 // To track max seq #'s we received per vbucketId.
@@ -67,6 +105,7 @@ type ExampleReceiver struct {
 
 func (r *ExampleReceiver) OnError(err error) {
 	log.Printf("error: %v", err)
+	reportStats(r.b, true)
 }
 
 func (r *ExampleReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
@@ -141,4 +180,17 @@ func (r *ExampleReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
 	log.Printf("rollback: vbucketId: %d, rollbackSeq: %x", vbucketId, rollbackSeq)
 
 	return fmt.Errorf("unimpl-rollback")
+}
+
+func dumpOnSignal(signals ...os.Signal) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, signals...)
+	for _ = range c {
+		reportStats(bds, true)
+
+		log.Printf("dump: goroutine...")
+		pprof.Lookup("goroutine").WriteTo(os.Stderr, 1)
+		log.Printf("dump: heap...")
+		pprof.Lookup("heap").WriteTo(os.Stderr, 1)
+	}
 }
