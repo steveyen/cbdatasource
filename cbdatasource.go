@@ -201,6 +201,13 @@ type BucketDataSourceStats struct {
 	TotRefreshWorkerDone uint64
 	TotRefreshWorkerOk   uint64
 
+	TotUPRDataChange                 uint64
+	TotUPRDataChangeStateErr         uint64
+	TotUPRDataChangeMutation         uint64
+	TotUPRDataChangeDeletion         uint64
+	TotUPRDataChangeExpiration       uint64
+	TotUPRDataChangeErr              uint64
+	TotUPRDataChangeOk               uint64
 	TotUPRCloseStream                uint64
 	TotUPRStreamReq                  uint64
 	TotUPRStreamReqWant              uint64
@@ -757,10 +764,13 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	progress int, err error) {
 	switch res.Opcode {
 	case gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION:
+		atomic.AddUint64(&d.stats.TotUPRDataChange, 1)
+
 		vbucketId := uint16(res.Status)
 		vbucketIdState := currVBucketIds[vbucketId]
 
 		if vbucketIdState != "running" {
+			atomic.AddUint64(&d.stats.TotUPRDataChangeStateErr, 1)
 			return 0, fmt.Errorf("worker non-running,"+
 				" vbucketId: %d, vbucketIdState: %s, res: %#v",
 				vbucketId, vbucketIdState, res)
@@ -768,13 +778,22 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		seq := binary.BigEndian.Uint64(res.Extras[:8])
 		if res.Opcode == gomemcached.UPR_MUTATION {
+			atomic.AddUint64(&d.stats.TotUPRDataChangeMutation, 1)
 			err = d.receiver.DataUpdate(vbucketId, res.Key, seq, res)
 		} else {
+			if res.Opcode == gomemcached.UPR_EXPIRATION {
+				atomic.AddUint64(&d.stats.TotUPRDataChangeDeletion, 1)
+			} else {
+				atomic.AddUint64(&d.stats.TotUPRDataChangeExpiration, 1)
+			}
 			err = d.receiver.DataDelete(vbucketId, res.Key, seq, res)
 		}
 		if err != nil {
+			atomic.AddUint64(&d.stats.TotUPRDataChangeErr, 1)
 			return 0, err
 		}
+
+		atomic.AddUint64(&d.stats.TotUPRDataChangeOk, 1)
 
 	case gomemcached.UPR_NOOP:
 		atomic.AddUint64(&d.stats.TotUPRNoop, 1)
