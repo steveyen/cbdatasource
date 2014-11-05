@@ -396,16 +396,26 @@ func (d *bucketDataSource) refreshCluster() int {
 		d.vbm = vbm
 		d.m.Unlock()
 
-		d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
-		atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkers, 1)
+	refreshWorkerLoop:
+		for {
+			d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
+			atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkers, 1)
 
-		_, alive := <-d.refreshClusterCh // Wait for a refresh kick.
-		if !alive {                      // Or, if we're closed then shutdown.
-			return -1
-		}
+			reason, alive := <-d.refreshClusterCh // Wait for a refresh cluster kick.
+			if !alive {                           // Or, if we're closed then shutdown.
+				return -1
+			}
 
-		if !d.isRunning() {
-			return -1
+			if !d.isRunning() {
+				return -1
+			}
+
+			// If it's only that a new worker appeared, then we can
+			// keep with this inner loop and not have to restart all
+			// the way at the top / retrieve a new cluster map, etc.
+			if reason != "new-worker" {
+				break refreshWorkerLoop
+			}
 		}
 
 		return 1 // We had progress, so restart at the first serverURL.
@@ -653,6 +663,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	recvBytesTotal := uint32(0)
 	ackBytes :=
 		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
+
+	d.kickCluster("new-worker")
 
 	for {
 		select {
