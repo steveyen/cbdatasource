@@ -412,7 +412,6 @@ func (d *bucketDataSource) refreshCluster() int {
 		d.vbm = vbm
 		d.m.Unlock()
 
-	refreshWorkersLoop:
 		for {
 			atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkers, 1)
 			d.refreshWorkersCh <- "new-vbm" // Kick the workers to refresh.
@@ -433,13 +432,11 @@ func (d *bucketDataSource) refreshCluster() int {
 			// the way at the top / retrieve a new cluster map, etc.
 			if reason != "new-worker" {
 				atomic.AddUint64(&d.stats.TotRefreshClusterAwokenRestart, 1)
-				break refreshWorkersLoop
+				return 1 // Assume progress, so restart at first serverURL.
 			}
 
 			atomic.AddUint64(&d.stats.TotRefreshClusterAwoken, 1)
 		}
-
-		return 1 // We had progress, so restart at the first serverURL.
 	}
 
 	return 0 // Ran through all the serverURLs, so no progress.
