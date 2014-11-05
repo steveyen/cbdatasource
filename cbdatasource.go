@@ -980,7 +980,7 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 	vbucketId uint16) error {
 	vbucketMetaData, lastSeq, err := d.getVBucketMetaData(vbucketId)
 	if err != nil {
-		return err
+		return fmt.Errorf("sendStreamReq, err: %v", err)
 	}
 
 	vbucketUUID := uint64(0)
