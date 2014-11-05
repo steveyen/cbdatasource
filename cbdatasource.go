@@ -191,7 +191,7 @@ type BucketDataSourceStats struct {
 	TotWorkerReceiveOk    uint64
 
 	TotWorkerBufferAck     uint64
-	TotWorkerSendErrCh     uint64
+	TotWorkerSendEndCh     uint64
 	TotWorkerRecvCh        uint64
 	TotWorkerRecvChDone    uint64
 	TotWorkerHandleRecvErr uint64
@@ -592,7 +592,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}
 	atomic.AddUint64(&d.stats.TotWorkerUPROpenOk, 1)
 
-	sendErrCh := make(chan bool)
+	sendEndCh := make(chan bool)
 	sendCh := make(chan *gomemcached.MCRequest)
 	recvCh := make(chan *gomemcached.MCResponse)
 
@@ -609,13 +609,14 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}
 
 	go func() { // Sender goroutine.
+		defer close(sendEndCh)
+
 		atomic.AddUint64(&d.stats.TotWorkerTransmitStart, 1)
 		for msg := range sendCh {
 			atomic.AddUint64(&d.stats.TotWorkerTransmit, 1)
 			err := client.Transmit(msg)
 			if err != nil {
 				atomic.AddUint64(&d.stats.TotWorkerTransmitErr, 1)
-				close(sendErrCh)
 				d.receiver.OnError(fmt.Errorf("client.Transmit, err: %v", err))
 				return
 			}
@@ -625,6 +626,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}()
 
 	go func() { // Receiver goroutine.
+		defer close(recvCh)
+
 		atomic.AddUint64(&d.stats.TotWorkerReceiveStart, 1)
 
 		var hdr [gomemcached.HDR_LEN]byte
@@ -637,7 +640,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			atomic.AddUint64(&d.stats.TotWorkerReceive, 1)
 			_, err := pkt.Receive(conn, hdr[:])
 			if err != nil {
-				close(recvCh)
 				atomic.AddUint64(&d.stats.TotWorkerReceiveErr, 1)
 				d.receiver.OnError(fmt.Errorf("pkt.Receive, err: %v", err))
 				return
@@ -668,8 +670,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 	for {
 		select {
-		case <-sendErrCh:
-			atomic.AddUint64(&d.stats.TotWorkerSendErrCh, 1)
+		case <-sendEndCh:
+			atomic.AddUint64(&d.stats.TotWorkerSendEndCh, 1)
 			return cleanup(1, nil) // We saw disconnect; assume we made progress.
 
 		case res, alive := <-recvCh:
