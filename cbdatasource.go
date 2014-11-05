@@ -557,7 +557,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	client, err := connect("tcp", server)
 	if err != nil {
 		atomic.AddUint64(&d.stats.TotWorkerConnectErr, 1)
-		d.receiver.OnError(err)
+		d.receiver.OnError(fmt.Errorf("worker connect, server: %s, err: %v",
+			server, err))
 		return 0
 	}
 	defer client.Close()
