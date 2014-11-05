@@ -1115,13 +1115,12 @@ func (d *bucketDataSource) Close() error {
 func (d *bucketDataSource) Kick(reason string) error {
 	go func() {
 		d.m.Lock()
-		defer d.m.Unlock()
-
 		if d.life == "running" {
 			atomic.AddUint64(&d.stats.TotKick, 1)
 			d.refreshClusterCh <- reason
 			atomic.AddUint64(&d.stats.TotKickOk, 1)
 		}
+		d.m.Unlock()
 	}()
 
 	return nil
