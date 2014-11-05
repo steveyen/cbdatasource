@@ -182,7 +182,8 @@ type BucketDataSourceStats struct {
 
 	TotWorkerStart      uint64
 	TotWorkerDone       uint64
-	TotWorkerLoop       uint64
+	TotWorkerBody       uint64
+	TotWorkerBodyKick   uint64
 	TotWorkerConnect    uint64
 	TotWorkerConnectErr uint64
 	TotWorkerConnectOk  uint64
@@ -574,14 +575,13 @@ func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 }
 
 func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
-	atomic.AddUint64(&d.stats.TotWorkerLoop, 1)
+	atomic.AddUint64(&d.stats.TotWorkerBody, 1)
 
 	if !d.isRunning() {
 		return -1
 	}
 
 	atomic.AddUint64(&d.stats.TotWorkerConnect, 1)
-
 	connect := d.options.Connect
 	if connect == nil {
 		connect = memcached.Connect
@@ -718,6 +718,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	// Track received bytes in case we need to buffer-ack.
 	recvBytesTotal := uint32(0)
 
+	atomic.AddUint64(&d.stats.TotWorkerBodyKick, 1)
 	d.Kick("new-worker")
 
 	for {
