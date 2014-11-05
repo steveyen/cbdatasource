@@ -1091,11 +1091,11 @@ func UPROpen(mc *memcached.Client, name string, bufSize uint32) error {
 	binary.BigEndian.PutUint32(rq.Extras[4:], flags)
 
 	if err := mc.Transmit(rq); err != nil {
-		return err
+		return fmt.Errorf("UPROpen transmit, err: %v", err)
 	}
 	res, err := mc.Receive()
 	if err != nil {
-		return err
+		return fmt.Errorf("UPROpen receive, err: %v", err)
 	}
 	if res.Opcode != gomemcached.UPR_OPEN {
 		return fmt.Errorf("UPROpen unexpected #opcode %v", res.Opcode)
@@ -1113,7 +1113,7 @@ func UPROpen(mc *memcached.Client, name string, bufSize uint32) error {
 			Body:   []byte(strconv.Itoa(int(bufSize))),
 		}
 		if err = mc.Transmit(rq); err != nil {
-			return err
+			return fmt.Errorf("UPROpen transmit UPR_CONTROL, err: %v", err)
 		}
 	}
 	return nil
