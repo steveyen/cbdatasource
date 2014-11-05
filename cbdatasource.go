@@ -153,7 +153,9 @@ var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 }
 
 type BucketDataSourceStats struct {
-	TotStart uint64
+	TotStart  uint64
+	TotKick   uint64
+	TotKickOk uint64
 
 	TotRefreshCluster                 uint64
 	TotRefreshClusterConnectBucket    uint64
@@ -1117,11 +1119,11 @@ func (d *bucketDataSource) Kick(reason string) error {
 		d.m.Lock()
 		defer d.m.Unlock()
 
-		if d.life != "running" {
-			return
+		if d.life == "running" {
+			atomic.AddUint64(&d.stats.TotKick, 1)
+			d.refreshClusterCh <- reason
+			atomic.AddUint64(&d.stats.TotKickOk, 1)
 		}
-
-		d.refreshClusterCh <- reason
 	}()
 
 	return nil
