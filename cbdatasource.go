@@ -810,7 +810,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			} else {
 				// Maybe the vbucket moved, so kick off a cluster refresh.
 				atomic.AddUint64(&d.stats.TotUPRStreamReqResKickCluster, 1)
-				go func() { d.refreshClusterCh <- "stream-req-error" }()
+				d.kickCluster("stream-req-error")
 			}
 		} else { // SUCCESS case.
 			atomic.AddUint64(&d.stats.TotUPRStreamReqResSuccess, 1)
@@ -857,7 +857,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		// kick off a cluster refresh.
 		if vbucketIdState != "closing" {
 			atomic.AddUint64(&d.stats.TotUPRStreamEndKickCluster, 1)
-			go func() { d.refreshClusterCh <- "stream-end" }()
+			d.kickCluster("stream-end")
 		}
 
 	case gomemcached.UPR_SNAPSHOT:
@@ -1029,23 +1029,38 @@ func (d *bucketDataSource) Stats(dest *BucketDataSourceStats) error {
 
 func (d *bucketDataSource) Close() error {
 	d.m.Lock()
+
 	if d.life != "running" {
 		d.m.Unlock()
 		return fmt.Errorf("Close() called when not in running state: %s", d.life)
 	}
 	d.life = "closed"
-	d.m.Unlock()
 
 	// Closing refreshClusterCh's goroutine closes refreshWorkersCh's
 	// goroutine, which closes every workerCh and then finally closes
 	// the closedCh.
 	close(d.refreshClusterCh)
 
+	d.m.Unlock()
+
 	<-d.closedCh
 
 	// NOTE: By this point, worker goroutines might still be going,
 	// but should end soon.
 	return nil
+}
+
+func (d *bucketDataSource) kickCluster(reason string) {
+	go func() {
+		d.m.Lock()
+		defer d.m.Unlock()
+
+		if d.life != "running" {
+			return
+		}
+
+		d.refreshClusterCh <- reason
+	}()
 }
 
 // --------------------------------------------------------------
