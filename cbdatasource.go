@@ -450,7 +450,7 @@ func (d *bucketDataSource) refreshCluster() int {
 			atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkersOk, 1)
 
 			reason, alive := <-d.refreshClusterCh // Wait for a refresh cluster kick.
-			if !alive || reason == "close" {      // Or, if we're closed then shutdown.
+			if !alive || reason == "CLOSE" {      // Or, if we're closed then shutdown.
 				atomic.AddUint64(&d.stats.TotRefreshClusterAwokenClosed, 1)
 				return -1
 			}
@@ -1159,7 +1159,7 @@ func (d *bucketDataSource) Close() error {
 	// A close message to refreshClusterCh's goroutine will end
 	// refreshWorkersCh's goroutine, which closes every workerCh and
 	// then finally closes the closedCh.
-	d.refreshClusterCh <- "close"
+	d.refreshClusterCh <- "CLOSE"
 
 	<-d.closedCh
 
