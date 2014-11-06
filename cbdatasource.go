@@ -54,27 +54,30 @@ type Receiver interface {
 
 	// Invoked by the BucketDataSource when it has received a mutation
 	// from the data source.  Receiver implementation is responsible
-	// for making its own copies of key and req data.
+	// for making its own copies of the key and request.
 	DataUpdate(vbucketId uint16, key []byte, seq uint64,
 		r *gomemcached.MCRequest) error
 
 	// Invoked by the BucketDataSource when it has received a deletion
 	// or expiration from the data source.  Receiver implementation is
-	// responsible for making its own copies of key and req.
+	// responsible for making its own copies of the key and request.
 	DataDelete(vbucketId uint16, key []byte, seq uint64,
 		r *gomemcached.MCRequest) error
 
-	// An advisory callback invoked by the BucketDataSource when it
-	// has received a start snapshot message from the data source.
-	// The Receiver implementation may choose to optimize persistence
-	// commits for previous snapshots as part of this callback (e.g.,
-	// commit any batch write for the previous snapshot).  Or the
-	// Receiver implementation may choose to do nothing.
+	// An callback invoked by the BucketDataSource when it has
+	// received a start snapshot message from the data source.  The
+	// Receiver implementation, for example, might choose to optimize
+	// persistence perhaps by preparing a batch write to
+	// application-specific storage.
 	SnapshotStart(vbucketId uint16, snapStart, snapEnd uint64, snapType uint32) error
 
 	// The Receiver should persist the value parameter of
 	// SetMetaData() for retrieval during some future call to
-	// GetMetaData(), to help with restarts of DCP streams.
+	// GetMetaData() by the BucketDataSource.  The metadata value
+	// should be considered "in-stream", or as part of the sequence
+	// history of mutations.  That is, a later Rollback() to some
+	// previous sequence number for a particular vbucketId should
+	// rollback both persisted metadata and regular data.
 	SetMetaData(vbucketId uint16, value []byte) error
 
 	// GetMetaData() should return the opaque value previously
@@ -83,12 +86,13 @@ type Receiver interface {
 	// new instance of a Receiver (as opposed to a restarted or
 	// reloaded Receiver), the Receiver should return (nil, 0, nil)
 	// for (value, lastSeq, err), respectively.  The lastSeq should be
-	// the last sequence number persisted during calls to DataUpdate()
-	// / DataDelete().
+	// the last sequence number received and persisted during calls to
+	// the Receiver's DataUpdate() & DataDelete() methods.
 	GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error)
 
 	// Invoked by the BucketDataSource when the datasource signals a
-	// rollback during stream initialization.
+	// rollback during stream initialization.  Note that both data and
+	// metadata should be rolled back.
 	Rollback(vbucketId uint16, rollbackSeq uint64) error
 }
 
@@ -273,6 +277,7 @@ type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
 
 // --------------------------------------------------------
 
+// This internal struct is exposed to enable json marshaling.
 type VBucketMetaData struct {
 	SeqStart    uint64     `json:"seqStart"`
 	SeqEnd      uint64     `json:"seqEnd"`
