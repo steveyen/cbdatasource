@@ -302,19 +302,22 @@ type bucketDataSource struct {
 	vbm  *couchbase.VBucketServerMap
 }
 
-// The applications provides an array of 1 or more serverURLs to
-// Couchbase Server cluster-manager REST "host:port" endpoints, like
-// "localhost:8091".  And, the application provides the poolName &
-// bucketName from where the BucketDataSource will retrieve data.  The
-// optional bucketUUID is double-checked by the BucketDataSource to
-// ensure we have the right bucket, and a bucketUUID of "" means no
-// uuid validation.  An optional array of vbucketId numbers allows the
-// application to control which vbuckets to retrieve; and the
-// vbucketIds array can be nil which means all vbuckets are retrieved.
-// The application must supply its own implementation of the Receiver
+// The application must supply an array of 1 or more serverURLs (or
+// "seed" URL's) to Couchbase Server cluster-manager REST URL
+// endpoints, like "http://localhost:8091".  The BucketDataSource
+// (after Start()'ing) will try each serverURL, in turn, until it can
+// get a successful cluster map.  Additionally, the application must
+// supply a poolName & bucketName from where the BucketDataSource will
+// retrieve data.  The optional bucketUUID is double-checked by the
+// BucketDataSource to ensure we have the correct bucket, and a
+// bucketUUID of "" means skip the bucketUUID validation.  An optional
+// array of vbucketId numbers allows the application to specify which
+// vbuckets to retrieve; and the vbucketIds array can be nil which
+// means all vbuckets are retrieved by the BucketDataSource.  The
+// application must supply its own implementation of the Receiver
 // interface (see the example program as a sample).  The optional
-// options parameter (may be nil) allows the application to specify
-// advanced parameters like backoff and retry-sleep parameters.
+// options parameter (which may be nil) allows the application to
+// specify advanced parameters like backoff and retry-sleep values.
 func NewBucketDataSource(serverURLs []string,
 	poolName, bucketName, bucketUUID string,
 	vbucketIds []uint16, authFunc AuthFunc,
