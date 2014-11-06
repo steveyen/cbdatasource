@@ -288,9 +288,9 @@ type bucketDataSource struct {
 
 	stats BucketDataSourceStats
 
-	m        sync.Mutex // Protects all the below fields.
-	life     string     // Valid life states: "" (unstarted); "running"; "closed".
-	vbm      *couchbase.VBucketServerMap
+	m    sync.Mutex // Protects all the below fields.
+	life string     // Valid life states: "" (unstarted); "running"; "closed".
+	vbm  *couchbase.VBucketServerMap
 }
 
 func NewBucketDataSource(serverURLs []string,
@@ -420,7 +420,7 @@ func (d *bucketDataSource) refreshCluster() int {
 			atomic.AddUint64(&d.stats.TotRefreshClusterKickWorkersOk, 1)
 
 			reason, alive := <-d.refreshClusterCh // Wait for a refresh cluster kick.
-			if !alive {                           // Or, if we're closed then shutdown.
+			if !alive || reason == "close" {      // Or, if we're closed then shutdown.
 				atomic.AddUint64(&d.stats.TotRefreshClusterAwokenClosed, 1)
 				return -1
 			}
@@ -1100,10 +1100,10 @@ func (d *bucketDataSource) Close() error {
 	d.life = "closed"
 	d.m.Unlock()
 
-	// Closing refreshClusterCh's goroutine closes refreshWorkersCh's
-	// goroutine, which closes every workerCh and then finally closes
-	// the closedCh.
-	close(d.refreshClusterCh)
+	// A close message to refreshClusterCh's goroutine will end
+	// refreshWorkersCh's goroutine, which closes every workerCh and
+	// then finally closes the closedCh.
+	d.refreshClusterCh <- "close"
 
 	<-d.closedCh
 
@@ -1114,13 +1114,11 @@ func (d *bucketDataSource) Close() error {
 
 func (d *bucketDataSource) Kick(reason string) error {
 	go func() {
-		d.m.Lock()
-		if d.life == "running" {
+		if d.isRunning() {
 			atomic.AddUint64(&d.stats.TotKick, 1)
 			d.refreshClusterCh <- reason
 			atomic.AddUint64(&d.stats.TotKickOk, 1)
 		}
-		d.m.Unlock()
 	}()
 
 	return nil
