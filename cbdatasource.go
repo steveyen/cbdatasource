@@ -251,7 +251,8 @@ type BucketDataSourceStats struct {
 	TotUPRBufferAck                        uint64
 	TotUPRBufferAckErr                     uint64
 
-	TotWantClosingVBucketErr uint64
+	TotWantCloseRequestedVBucketErr uint64
+	TotWantClosingVBucketErr        uint64
 
 	TotGetVBucketMetaData             uint64
 	TotGetVBucketMetaDataUnmarshalErr uint64
@@ -793,7 +794,13 @@ func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
 
 	for currVBucketId, state := range currVBucketIds {
 		if !wantVBucketIds[currVBucketId] {
-			if state != "" && state != "closing" {
+			if state == "requested" {
+				// A UPR_STREAMREQ request is already on the wire, so
+				// error rather than have complex compensation logic.
+				atomic.AddUint64(&d.stats.TotWantCloseRequestedVBucketErr, 1)
+				return 0, fmt.Errorf("want close requested vbucketId: %d", currVBucketId)
+			}
+			if state == "running" {
 				currVBucketIds[currVBucketId] = "closing"
 				atomic.AddUint64(&d.stats.TotUPRCloseStream, 1)
 				sendCh <- &gomemcached.MCRequest{
@@ -811,7 +818,7 @@ func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
 			// A UPR_CLOSESTREAM request is already on the wire, so
 			// error rather than have complex compensation logic.
 			atomic.AddUint64(&d.stats.TotWantClosingVBucketErr, 1)
-			return 0, fmt.Errorf("want closing vbucket: %d", wantVBucketId)
+			return 0, fmt.Errorf("want closing vbucketId: %d", wantVBucketId)
 		}
 		if state == "" {
 			currVBucketIds[wantVBucketId] = "requested"
