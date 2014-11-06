@@ -33,7 +33,8 @@ type BucketDataSource interface {
 	// after which calls will be made to the Receiver's methods.
 	Start() error
 
-	// Force a cluster map refresh.  A reason string of "" is valid.
+	// Asynchronously request a cluster map refresh.  A reason string
+	// of "" is valid.
 	Kick(reason string) error
 
 	// Returns an immutable snapshot of stats.
