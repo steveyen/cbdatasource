@@ -221,6 +221,10 @@ type BucketDataSourceStats struct {
 	TotUPRDataChangeErr                    uint64
 	TotUPRDataChangeOk                     uint64
 	TotUPRCloseStream                      uint64
+	TotUPRCloseStreamRes                   uint64
+	TotUPRCloseStreamResStateErr           uint64
+	TotUPRCloseStreamResErr                uint64
+	TotUPRCloseStreamResOk                 uint64
 	TotUPRStreamReq                        uint64
 	TotUPRStreamReqWant                    uint64
 	TotUPRStreamReqRes                     uint64
@@ -924,6 +928,31 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			d.Kick("stream-end")
 		}
 
+	case gomemcached.UPR_CLOSESTREAM:
+		atomic.AddUint64(&d.stats.TotUPRCloseStreamRes, 1)
+
+		vbucketId := uint16(res.Opaque)
+		vbucketIdState := currVBucketIds[vbucketId]
+
+		if vbucketIdState != "closing" {
+			atomic.AddUint64(&d.stats.TotUPRCloseStreamResStateErr, 1)
+			return 0, fmt.Errorf("close-stream bad state,"+
+				" vbucketId: %d, vbucketIdState: %s, res: %#v",
+				vbucketId, vbucketIdState, res)
+		}
+
+		if res.Status != gomemcached.SUCCESS {
+			atomic.AddUint64(&d.stats.TotUPRCloseStreamResErr, 1)
+			return 0, fmt.Errorf("close-stream failed,"+
+				" vbucketId: %d, vbucketIdState: %s, res: %#v",
+				vbucketId, vbucketIdState, res)
+		}
+
+		// At this point, we can ignore this success response to our
+		// close-stream request, as the server will send a stream-end
+		// afterwards.
+		atomic.AddUint64(&d.stats.TotUPRCloseStreamResOk, 1)
+
 	case gomemcached.UPR_SNAPSHOT:
 		atomic.AddUint64(&d.stats.TotUPRSnapshot, 1)
 
@@ -989,11 +1018,6 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	case gomemcached.UPR_ADDSTREAM:
 		// This normally comes from ns-server / dcp-migrator.
 		return 0, fmt.Errorf("unexpected upr_addstream, res: %#v", res)
-
-	case gomemcached.UPR_CLOSESTREAM:
-		// Shouldn't see this, as producers (oddly!) respond
-		// with a STREAM_END to our CLOSE_STREAM request.
-		return 0, fmt.Errorf("unexpected upr_closestream, res: %#v", res)
 
 	case gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION:
 		// This should have been handled already in receiver goroutine.
