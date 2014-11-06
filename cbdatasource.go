@@ -27,6 +27,22 @@ import (
 	"github.com/couchbaselabs/go-couchbase"
 )
 
+// This is the main interface returned by NewBucketDataSource().
+type BucketDataSource interface {
+	// Use Start() to kickoff connectivity to a Couchbase cluster,
+	// after which calls will be made to the Receiver's methods.
+	Start() error
+
+	// Force a cluster map refresh.  A reason string of "" is valid.
+	Kick(reason string) error
+
+	// Returns an immutable snapshot of stats.
+	Stats(dest *BucketDataSourceStats) error
+
+	// Stops the underlying goroutines.
+	Close() error
+}
+
 // Interface implemented by the application, or the receiver of data.
 type Receiver interface {
 	// Invoked in advisory fashion by the BucketDataSource when it
@@ -74,21 +90,6 @@ type Receiver interface {
 	// Invoked by the BucketDataSource when the datasource signals a
 	// rollback during stream initialization.
 	Rollback(vbucketId uint16, rollbackSeq uint64) error
-}
-
-type BucketDataSource interface {
-	// Use Start() to kickoff all the goroutines and connectivity,
-	// after which calls will be made to Receiver methods.
-	Start() error
-
-	// Force a cluster map refresh.  A reason string of "" is valid.
-	Kick(reason string) error
-
-	// Returns an immutable snapshot of stats.
-	Stats(dest *BucketDataSourceStats) error
-
-	// Stops the underlying goroutines.
-	Close() error
 }
 
 type BucketDataSourceOptions struct {
@@ -152,6 +153,9 @@ var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 	FeedBufferAckThreshold: 0.2,
 }
 
+// See the BucketDataSource.Stats() method for how to retrieve stat
+// metrics from a BucketDataSource.  All the metrics here prefixed
+// with "Tot" are monotonic counters: they only increase.
 type BucketDataSourceStats struct {
 	TotStart  uint64
 	TotKick   uint64
@@ -298,6 +302,19 @@ type bucketDataSource struct {
 	vbm  *couchbase.VBucketServerMap
 }
 
+// The applications provides an array of 1 or more serverURLs to
+// Couchbase Server cluster-manager REST "host:port" endpoints, like
+// "localhost:8091".  And, the application provides the poolName &
+// bucketName from where the BucketDataSource will retrieve data.  The
+// optional bucketUUID is double-checked by the BucketDataSource to
+// ensure we have the right bucket, and a bucketUUID of "" means no
+// uuid validation.  An optional array of vbucketId numbers allows the
+// application to control which vbuckets to retrieve; and the
+// vbucketIds array can be nil which means all vbuckets are retrieved.
+// The application must supply its own implementation of the Receiver
+// interface (see the example program as a sample).  The optional
+// options parameter (may be nil) allows the application to specify
+// advanced parameters like backoff and retry-sleep parameters.
 func NewBucketDataSource(serverURLs []string,
 	poolName, bucketName, bucketUUID string,
 	vbucketIds []uint16, authFunc AuthFunc,
