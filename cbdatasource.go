@@ -213,7 +213,6 @@ type BucketDataSourceStats struct {
 	TotWorkerReceiveErr   uint64
 	TotWorkerReceiveOk    uint64
 
-	TotWorkerBufferAck     uint64
 	TotWorkerSendEndCh     uint64
 	TotWorkerRecvCh        uint64
 	TotWorkerRecvChDone    uint64
@@ -260,6 +259,7 @@ type BucketDataSourceStats struct {
 	TotUPRControlErr                       uint64
 	TotUPRBufferAck                        uint64
 	TotUPRBufferAckErr                     uint64
+	TotUPRBufferAckSend                    uint64
 
 	TotWantCloseRequestedVBucketErr uint64
 	TotWantClosingVBucketErr        uint64
@@ -699,6 +699,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 		var hdr [gomemcached.HDR_LEN]byte
 		var pkt gomemcached.MCRequest
 
+		// Track received bytes in case we need to buffer-ack.
+		recvBytesTotal := uint32(0)
+
 		conn := client.Hijack()
 
 		for {
@@ -753,15 +756,23 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 					Body:   pkt.Body,
 				}
 			}
+
+			recvBytesTotal +=
+				uint32(gomemcached.HDR_LEN) +
+					uint32(len(pkt.Key)+len(pkt.Extras)+len(pkt.Body))
+			if ackBytes > 0 && recvBytesTotal > ackBytes {
+				ack := &gomemcached.MCResponse{Opcode: gomemcached.UPR_BUFFERACK}
+				ack.Extras = make([]byte, 4) // TODO: Memory mgmt.
+				binary.BigEndian.PutUint32(ack.Extras, uint32(recvBytesTotal))
+				recvCh <- ack
+				recvBytesTotal = 0
+			}
 		}
 	}()
 
 	// Values for vbucketId state in currVBucketIds:
 	// "" (dead/closed/unknown), "requested", "running", "closing".
 	currVBucketIds := map[uint16]string{}
-
-	// Track received bytes in case we need to buffer-ack.
-	recvBytesTotal := uint32(0)
 
 	atomic.AddUint64(&d.stats.TotWorkerBodyKick, 1)
 	d.Kick("new-worker")
@@ -790,18 +801,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				return cleanup(progress, err)
 			}
 			atomic.AddUint64(&d.stats.TotWorkerHandleRecvOk, 1)
-
-			recvBytesTotal +=
-				uint32(gomemcached.HDR_LEN) +
-					uint32(len(res.Key)+len(res.Extras)+len(res.Body))
-			if ackBytes > 0 && recvBytesTotal > ackBytes {
-				ack := &gomemcached.MCRequest{Opcode: gomemcached.UPR_BUFFERACK}
-				ack.Extras = make([]byte, 4) // TODO: Memory mgmt.
-				binary.BigEndian.PutUint32(ack.Extras, uint32(recvBytesTotal))
-				atomic.AddUint64(&d.stats.TotWorkerBufferAck, 1)
-				sendCh <- ack
-				recvBytesTotal = 0
-			}
 
 		case wantVBucketIds, alive := <-workerCh:
 			atomic.AddUint64(&d.stats.TotRefreshWorker, 1)
@@ -1045,18 +1044,24 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		// TODO: Do we need to handle snapAck flag in snapType?
 
-	case gomemcached.UPR_CONTROL:
-		atomic.AddUint64(&d.stats.TotUPRControl, 1)
-		if res.Status != gomemcached.SUCCESS {
-			atomic.AddUint64(&d.stats.TotUPRControlErr, 1)
-			return 0, fmt.Errorf("failed control: %#v", res)
-		}
-
 	case gomemcached.UPR_BUFFERACK:
 		atomic.AddUint64(&d.stats.TotUPRBufferAck, 1)
 		if res.Status != gomemcached.SUCCESS {
 			atomic.AddUint64(&d.stats.TotUPRBufferAckErr, 1)
 			return 0, fmt.Errorf("failed bufferack: %#v", res)
+		}
+
+		atomic.AddUint64(&d.stats.TotUPRBufferAckSend, 1)
+		sendCh <- &gomemcached.MCRequest{
+			Opcode: gomemcached.UPR_BUFFERACK,
+			Extras: res.Extras,
+		}
+
+	case gomemcached.UPR_CONTROL:
+		atomic.AddUint64(&d.stats.TotUPRControl, 1)
+		if res.Status != gomemcached.SUCCESS {
+			atomic.AddUint64(&d.stats.TotUPRControlErr, 1)
+			return 0, fmt.Errorf("failed control: %#v", res)
 		}
 
 	case gomemcached.UPR_OPEN:
