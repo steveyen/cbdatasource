@@ -256,7 +256,7 @@ func TestBucketDataSourceStatsAtomicCopyTo(t *testing.T) {
 }
 
 func TestImmediateStartClose(t *testing.T) {
-	connectBucket := func(serverURL, poolName, bucketName, bucketUUID string,
+	connectBucket := func(serverURL, poolName, bucketName string,
 		authFunc AuthFunc) (Bucket, error) {
 		return nil, fmt.Errorf("fake connectBucket err")
 	}
@@ -351,9 +351,9 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	var connectBucketCh chan []string
 	var connectCh chan []string
 
-	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
-		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+	connectBucket := func(serverURL, poolName, bucketName string,
+		authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
 
@@ -392,7 +392,7 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 		t.Errorf("expected no-err on Start()")
 	}
 	c := <-connectBucketCh
-	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName"}) {
 		t.Errorf("expected connectBucket params")
 	}
 	select {
@@ -415,9 +415,9 @@ func TestConnectError(t *testing.T) {
 	var connectBucketCh chan []string
 	var connectCh chan []string
 
-	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
-		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+	connectBucket := func(serverURL, poolName, bucketName string,
+		authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
 
@@ -466,7 +466,7 @@ func TestConnectError(t *testing.T) {
 		t.Errorf("expected no-err on Start()")
 	}
 	c := <-connectBucketCh
-	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName"}) {
 		t.Errorf("expected connectBucket params, got: %#v", c)
 	}
 	c = <-connectCh
@@ -503,9 +503,9 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	var connectBucketCh chan []string
 	var connectCh chan []string
 
-	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
-		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+	connectBucket := func(serverURL, poolName, bucketName string,
+		authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
 
@@ -553,7 +553,7 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 		t.Errorf("expected no-err on Start()")
 	}
 	c := <-connectBucketCh
-	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName"}) {
 		t.Errorf("expected connectBucket params, got: %#v", c)
 	}
 	c = <-connectCh
@@ -614,9 +614,9 @@ func TestUPROpenStreamReq(t *testing.T) {
 	var connectBucketCh chan []string
 	var connectCh chan []string
 
-	connectBucket := func(serverURL, poolName,
-		bucketName, bucketUUID string, authFunc AuthFunc) (Bucket, error) {
-		connectBucketCh <- []string{serverURL, poolName, bucketName, bucketUUID}
+	connectBucket := func(serverURL, poolName, bucketName string,
+		authFunc AuthFunc) (Bucket, error) {
+		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
 
@@ -664,7 +664,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 		t.Errorf("expected no-err on Start()")
 	}
 	c := <-connectBucketCh
-	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName", ""}) {
+	if !reflect.DeepEqual(c, []string{"serverA", "poolName", "bucketName"}) {
 		t.Errorf("expected connectBucket params, got: %#v", c)
 	}
 	c = <-connectCh

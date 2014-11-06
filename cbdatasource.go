@@ -130,7 +130,7 @@ type BucketDataSourceOptions struct {
 
 	// Optional function to connect to a couchbase cluster manager bucket.
 	// Defaults to ConnectBucket() function in this package.
-	ConnectBucket func(serverURL, poolName, bucketName, bucketUUID string,
+	ConnectBucket func(serverURL, poolName, bucketName string,
 		authFunc AuthFunc) (Bucket, error)
 
 	// Optional function to connect to a couchbase data manager node.
@@ -169,6 +169,7 @@ type BucketDataSourceStats struct {
 	TotRefreshClusterConnectBucket    uint64
 	TotRefreshClusterConnectBucketErr uint64
 	TotRefreshClusterConnectBucketOk  uint64
+	TotRefreshClusterBucketUUIDErr    uint64
 	TotRefreshClusterVBMNilErr        uint64
 	TotRefreshClusterKickWorkers      uint64
 	TotRefreshClusterKickWorkersOk    uint64
@@ -419,14 +420,22 @@ func (d *bucketDataSource) refreshCluster() int {
 			connectBucket = ConnectBucket
 		}
 
-		bucket, err := connectBucket(serverURL,
-			d.poolName, d.bucketName, d.bucketUUID, d.authFunc)
+		bucket, err := connectBucket(serverURL, d.poolName, d.bucketName, d.authFunc)
 		if err != nil {
 			atomic.AddUint64(&d.stats.TotRefreshClusterConnectBucketErr, 1)
 			d.receiver.OnError(err)
 			continue // Try another serverURL.
 		}
 		atomic.AddUint64(&d.stats.TotRefreshClusterConnectBucketOk, 1)
+
+		if d.bucketUUID != "" && d.bucketUUID != bucket.GetUUID() {
+			bucket.Close()
+			atomic.AddUint64(&d.stats.TotRefreshClusterBucketUUIDErr, 1)
+			d.receiver.OnError(fmt.Errorf("mismatched bucket uuid,"+
+				" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
+				serverURL, d.bucketName, d.bucketUUID, bucket.GetUUID()))
+			continue // Try another serverURL.
+		}
 
 		vbm := bucket.VBServerMap()
 		if vbm == nil {
@@ -1205,7 +1214,7 @@ func (bw *bucketWrapper) VBServerMap() *couchbase.VBucketServerMap {
 }
 
 // TODO: Use AUTH'ed approach.
-func ConnectBucket(serverURL, poolName, bucketName, bucketUUID string,
+func ConnectBucket(serverURL, poolName, bucketName string,
 	authFunc AuthFunc) (Bucket, error) {
 	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
 	if err != nil {
@@ -1213,14 +1222,7 @@ func ConnectBucket(serverURL, poolName, bucketName, bucketUUID string,
 	}
 	if bucket == nil {
 		return nil, fmt.Errorf("unknown bucket,"+
-			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-			serverURL, bucketName, bucketUUID, bucket.UUID)
-	}
-	if bucketUUID != "" && bucketUUID != bucket.UUID {
-		bucket.Close()
-		return nil, fmt.Errorf("mismatched bucket uuid,"+
-			" serverURL: %s, bucketName: %s, bucketUUID: %s, bucket.UUID: %s",
-			serverURL, bucketName, bucketUUID, bucket.UUID)
+			" serverURL: %s, bucketName: %s", serverURL, bucketName)
 	}
 	return &bucketWrapper{b: bucket}, nil
 }
