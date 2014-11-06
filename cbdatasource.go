@@ -592,6 +592,7 @@ func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 		sleepMaxMS = DefaultBucketDataSourceOptions.DataManagerSleepMaxMS
 	}
 
+	// Use exponential backoff loop to handle reconnect retries to the server.
 	go func() {
 		atomic.AddUint64(&d.stats.TotWorkerStart, 1)
 
@@ -603,6 +604,9 @@ func (d *bucketDataSource) workerStart(server string, workerCh chan []uint16) {
 	}()
 }
 
+// Connect once to the server and work the UPR stream.  If anything
+// goes wrong, return our level of progress in order to let our caller
+// control any potential retries.
 func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	atomic.AddUint64(&d.stats.TotWorkerBody, 1)
 
@@ -701,6 +705,8 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			if pkt.Opcode == gomemcached.UPR_MUTATION ||
 				pkt.Opcode == gomemcached.UPR_DELETION ||
 				pkt.Opcode == gomemcached.UPR_EXPIRATION {
+				// Most common messages are handled on this same
+				// goroutine instead of sending over the recvCh.
 				atomic.AddUint64(&d.stats.TotUPRDataChange, 1)
 
 				vbucketId := pkt.VBucket
@@ -952,9 +958,9 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 				vbucketId, vbucketIdState, res)
 		}
 
-		// We should not normally see a stream-end, unless we
-		// were trying to close.  Maybe the vbucket moved, so
-		// kick off a cluster refresh.
+		// We should not normally see a stream-end, unless we were
+		// trying to close.  Maybe the vbucket moved, though, so kick
+		// off a cluster refresh.
 		if vbucketIdState != "closing" {
 			atomic.AddUint64(&d.stats.TotUPRStreamEndKick, 1)
 			d.Kick("stream-end")
