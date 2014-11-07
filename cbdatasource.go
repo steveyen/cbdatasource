@@ -1184,8 +1184,8 @@ func (d *bucketDataSource) Close() error {
 
 	<-d.closedCh
 
-	// NOTE: By this point, worker goroutines might still be going,
-	// but should end soon.
+	// TODO: By this point, worker goroutines may still be going, but
+	// should end soon.  Instead Close() should be 100% synchronous.
 	return nil
 }
 
