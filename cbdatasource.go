@@ -45,6 +45,10 @@ type BucketDataSource interface {
 }
 
 // Interface implemented by the application, or the receiver of data.
+// Calls to methods on this interface may be made by the
+// BucketDataSource using multiple, concurrent goroutines, so the
+// application should implement its own Receiver-side synchronizations
+// if needed.
 type Receiver interface {
 	// Invoked in advisory fashion by the BucketDataSource when it
 	// encounters an error.  The BucketDataSource will continue to try
