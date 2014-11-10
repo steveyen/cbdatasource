@@ -133,6 +133,10 @@ type BucketDataSourceOptions struct {
 	// percentage of FeedBufferSizeBytes is reached.
 	FeedBufferAckThreshold float32
 
+	// Used for applications like backup which wish to control the
+	// last sequence number provided.  Key is vbucketId, value is seqEnd.
+	SeqEnd map[uint16]uint64
+
 	// Optional function to connect to a couchbase cluster manager bucket.
 	// Defaults to ConnectBucket() function in this package.
 	ConnectBucket func(serverURL, poolName, bucketName string,
@@ -1158,7 +1162,14 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 	}
 
 	seqStart := lastSeq
-	seqEnd := uint64(0xffffffffffffffff) // TODO: Parameterize this for incr-backup.
+
+	seqEnd := uint64(0xffffffffffffffff)
+	if d.options.SeqEnd != nil { // Allow apps like backup to control the seqEnd.
+		if s, exists := d.options.SeqEnd[vbucketId]; exists {
+			seqEnd = s
+		}
+	}
+
 	flags := uint32(0) // Flags mostly used for takeovers, etc, which we don't use.
 
 	req := &gomemcached.MCRequest{
