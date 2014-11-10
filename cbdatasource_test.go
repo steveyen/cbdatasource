@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -342,6 +343,54 @@ func TestImmediateStartClose(t *testing.T) {
 	err = bds.Close()
 	if err == nil {
 		t.Errorf("expected err on re-Close")
+	}
+}
+
+func TestWrongBucketUUID(t *testing.T) {
+	connectBucket := func(serverURL, poolName, bucketName string,
+		authFunc AuthFunc) (Bucket, error) {
+		return &TestBucket{vbsm: &couchbase.VBucketServerMap{}}, nil
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		return nil, fmt.Errorf("fake connect err")
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := "not-a-good-uuid"
+	vbucketIds := []uint16(nil)
+	var authFunc AuthFunc
+	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+
+	// ------------------------------------------------------------
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no err on Start")
+	}
+
+	runtime.Gosched()
+
+	// ------------------------------------------------------------
+	err = bds.Close()
+	if err != nil {
+		t.Errorf("expected no err on Close")
+	}
+
+	if len(receiver.errs) != 1 {
+		t.Errorf("expected err due to mixmatched bucketUUID")
 	}
 }
 
