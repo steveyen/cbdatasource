@@ -346,6 +346,57 @@ func TestImmediateStartClose(t *testing.T) {
 	}
 }
 
+func TestErrOnConnectBucket(t *testing.T) {
+	theErr := fmt.Errorf("fake connectBucket err")
+
+	connectBucket := func(serverURL, poolName, bucketName string,
+		authFunc AuthFunc) (Bucket, error) {
+		return nil, theErr
+	}
+
+	connect := func(protocol, dest string) (*memcached.Client, error) {
+		if protocol != "tcp" || dest != "serverA" {
+			t.Errorf("unexpected connect, protocol: %s, dest: %s", protocol, dest)
+		}
+		return nil, fmt.Errorf("fake connect err")
+	}
+
+	serverURLs := []string{"serverA"}
+	bucketUUID := ""
+	vbucketIds := []uint16(nil)
+	var authFunc AuthFunc
+	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
+	options := &BucketDataSourceOptions{
+		ConnectBucket: connectBucket,
+		Connect:       connect,
+	}
+
+	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
+		vbucketIds, authFunc, receiver, options)
+	if err != nil || bds == nil {
+		t.Errorf("expected no err, got err: %v", err)
+	}
+
+	err = bds.Start()
+	if err != nil {
+		t.Errorf("expected no err on Start")
+	}
+
+	runtime.Gosched()
+
+	err = bds.Close()
+	if err != nil {
+		t.Errorf("expected no err on Close")
+	}
+
+	if len(receiver.errs) != 1 {
+		t.Errorf("expected 1 err due to err on connectBucket")
+	}
+	if receiver.errs[0] != theErr {
+		t.Errorf("expected err due to err on connectBucket")
+	}
+}
+
 func TestWrongBucketUUID(t *testing.T) {
 	connectBucket := func(serverURL, poolName, bucketName string,
 		authFunc AuthFunc) (Bucket, error) {
@@ -375,7 +426,6 @@ func TestWrongBucketUUID(t *testing.T) {
 		t.Errorf("expected no err, got err: %v", err)
 	}
 
-	// ------------------------------------------------------------
 	err = bds.Start()
 	if err != nil {
 		t.Errorf("expected no err on Start")
@@ -383,7 +433,6 @@ func TestWrongBucketUUID(t *testing.T) {
 
 	runtime.Gosched()
 
-	// ------------------------------------------------------------
 	err = bds.Close()
 	if err != nil {
 		t.Errorf("expected no err on Close")
