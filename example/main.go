@@ -127,50 +127,30 @@ func main() {
 
 	receiver := &ExampleReceiver{}
 
-	b, err := cbdatasource.NewBucketDataSource(serverURLs,
+	var err error
+
+	bds, err = cbdatasource.NewBucketDataSource(serverURLs,
 		*poolName, *bucketName, *bucketUUID,
 		vbucketIdsArr, authFunc, receiver, options)
 	if err != nil {
 		log.Fatalf(fmt.Sprintf("error: NewBucketDataSource, err: %v", err))
 	}
 
-	bds = b
-
-	if err = b.Start(); err != nil {
+	if err = bds.Start(); err != nil {
 		log.Fatalf(fmt.Sprintf("error: Start, err: %v", err))
 	}
 
 	if *verbose > 0 {
-		log.Printf("started bucket data source: %v", b)
+		log.Printf("started bucket data source: %v", bds)
 	}
 
 	for {
 		time.Sleep(1000 * time.Millisecond)
-		reportStats(b, false)
+		reportStats(bds, false)
 	}
 }
 
-var mutexStats sync.Mutex
-var lastStats = &cbdatasource.BucketDataSourceStats{}
-var currStats = &cbdatasource.BucketDataSourceStats{}
-
-func reportStats(b cbdatasource.BucketDataSource, force bool) {
-	if *verbose <= 0 {
-		return
-	}
-
-	mutexStats.Lock()
-	defer mutexStats.Unlock()
-
-	b.Stats(currStats)
-	if force || !reflect.DeepEqual(lastStats, currStats) {
-		buf, err := json.Marshal(currStats)
-		if err == nil {
-			log.Printf("%s", string(buf))
-		}
-		lastStats, currStats = currStats, lastStats
-	}
-}
+// ----------------------------------------------------------------
 
 type ExampleReceiver struct {
 	m sync.Mutex
@@ -204,18 +184,6 @@ func (r *ExampleReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
 	}
 	r.updateSeq(vbucketId, seq)
 	return nil
-}
-
-func (r *ExampleReceiver) updateSeq(vbucketId uint16, seq uint64) {
-	r.m.Lock()
-	defer r.m.Unlock()
-
-	if r.seqs == nil {
-		r.seqs = make(map[uint16]uint64)
-	}
-	if r.seqs[vbucketId] < seq {
-		r.seqs[vbucketId] = seq // Remember the max seq for GetMetaData().
-	}
 }
 
 func (r *ExampleReceiver) SnapshotStart(vbucketId uint16,
@@ -270,6 +238,44 @@ func (r *ExampleReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
 	}
 
 	return fmt.Errorf("unimpl-rollback")
+}
+
+// ----------------------------------------------------------------
+
+func (r *ExampleReceiver) updateSeq(vbucketId uint16, seq uint64) {
+	r.m.Lock()
+	defer r.m.Unlock()
+
+	if r.seqs == nil {
+		r.seqs = make(map[uint16]uint64)
+	}
+	if r.seqs[vbucketId] < seq {
+		r.seqs[vbucketId] = seq // Remember the max seq for GetMetaData().
+	}
+}
+
+// ----------------------------------------------------------------
+
+var mutexStats sync.Mutex
+var lastStats = &cbdatasource.BucketDataSourceStats{}
+var currStats = &cbdatasource.BucketDataSourceStats{}
+
+func reportStats(b cbdatasource.BucketDataSource, force bool) {
+	if *verbose <= 0 {
+		return
+	}
+
+	mutexStats.Lock()
+	defer mutexStats.Unlock()
+
+	b.Stats(currStats)
+	if force || !reflect.DeepEqual(lastStats, currStats) {
+		buf, err := json.Marshal(currStats)
+		if err == nil {
+			log.Printf("%s", string(buf))
+		}
+		lastStats, currStats = currStats, lastStats
+	}
 }
 
 func dumpOnSignal(signals ...os.Signal) {
