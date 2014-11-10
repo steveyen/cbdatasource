@@ -11,6 +11,11 @@ XDCR-DCP use case...
     connection per pair of local & remote nodes).  If something
     happens, it doesn't want a vbucket which moved to another source
     server to automatically be connected to.
+  - one approach to do this today is the applicaiton can provide its
+    own ConnectBucket() implementation in the BucketDataSourceOptions.
+    if there's a connection attempt to a server the application
+    doesn't want, then the application can reject the connection and
+    do a BucketDataSource.Close().
 
 - feedback on high level versus low level API mixing...
   - why not provide full bucket url?
