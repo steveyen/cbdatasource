@@ -485,8 +485,10 @@ func (d *bucketDataSource) refreshCluster() int {
 		}
 	}
 
-	// TODO: Need to notify Receiver with OnError() sub-interfaces in
-	// case Receiver wants to Close() it down after enough attempts.
+	// TODO: Need to notify Receiver with OnError() typed interfaces
+	// in case Receiver wants to Close() it down after enough
+	// attempts.  The typed interfaces allow Receiver to have better
+	// error handling logic.
 	//
 	return 0 // Ran through all the serverURLs, so no progress.
 }
