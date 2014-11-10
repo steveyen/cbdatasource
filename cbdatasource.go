@@ -143,6 +143,16 @@ type BucketDataSourceOptions struct {
 	Connect func(protocol, dest string) (*memcached.Client, error)
 }
 
+// Error type passed to Receiver.OnError() when the BucketDataSource
+// failed to connect to all serverURLs.
+type AllServerURLsConnectBucketError struct {
+	ServerURLs []string
+}
+
+func (e *AllServerURLsConnectBucketError) Error() string {
+	return fmt.Sprintf("could not connect to any serverURL: %#v", e.ServerURLs)
+}
+
 type Bucket interface {
 	Close()
 	GetUUID() string
@@ -485,11 +495,11 @@ func (d *bucketDataSource) refreshCluster() int {
 		}
 	}
 
-	// TODO: Need to notify Receiver with OnError() typed interfaces
-	// in case Receiver wants to Close() it down after enough
-	// attempts.  The typed interfaces allow Receiver to have better
-	// error handling logic.
-	//
+	// Notify Receiver in case it wants to Close() down this
+	// BucketDataSource after enough attempts.  The typed interfaces
+	// allow Receiver to have better error handling logic.
+	d.receiver.OnError(&AllServerURLsConnectBucketError{ServerURLs: d.serverURLs})
+
 	return 0 // Ran through all the serverURLs, so no progress.
 }
 

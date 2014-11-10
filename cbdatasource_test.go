@@ -389,11 +389,11 @@ func TestErrOnConnectBucket(t *testing.T) {
 		t.Errorf("expected no err on Close")
 	}
 
-	if len(receiver.errs) != 1 {
-		t.Errorf("expected 1 err due to err on connectBucket")
+	if len(receiver.errs) < 1 {
+		t.Errorf("expected at least 1 err due to err on connectBucket")
 	}
 	if receiver.errs[0] != theErr {
-		t.Errorf("expected err due to err on connectBucket")
+		t.Errorf("expected first err due to err on connectBucket")
 	}
 }
 
@@ -438,8 +438,8 @@ func TestWrongBucketUUID(t *testing.T) {
 		t.Errorf("expected no err on Close")
 	}
 
-	if len(receiver.errs) != 1 {
-		t.Errorf("expected err due to mixmatched bucketUUID")
+	if len(receiver.errs) < 1 {
+		t.Errorf("expected at least 1 err due to mixmatched bucketUUID")
 	}
 }
 
@@ -502,7 +502,7 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected clean Close(), got err: %v", err)
 	}
-	if len(receiver.errs) != 1 {
+	if len(receiver.errs) < 1 {
 		t.Errorf("expected connect err")
 	}
 }
