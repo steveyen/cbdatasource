@@ -1051,6 +1051,9 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		snapType := binary.BigEndian.Uint32(res.Extras[16:20])
 
+		// NOTE: We should never see a snapType with SNAP_ACK flag of
+		// true, as that's only used during takeovers.
+
 		atomic.AddUint64(&d.stats.TotUPRSnapshotStart, 1)
 		err = d.receiver.SnapshotStart(vbucketId,
 			v.SnapStart, v.SnapEnd, snapType)
@@ -1060,8 +1063,6 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		}
 
 		atomic.AddUint64(&d.stats.TotUPRSnapshotOk, 1)
-
-		// TODO: Do we need to handle snapAck flag in snapType?
 
 	case gomemcached.UPR_BUFFERACK:
 		atomic.AddUint64(&d.stats.TotUPRBufferAck, 1)
@@ -1157,10 +1158,8 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 	}
 
 	seqStart := lastSeq
-	seqEnd := uint64(0xffffffffffffffff)
-	flags := uint32(0)
-
-	// TODO: Parameterizing flags & seqEnd might allow for incremental backup?
+	seqEnd := uint64(0xffffffffffffffff) // TODO: Parameterize this for incr-backup.
+	flags := uint32(0) // Flags mostly used for takeovers, etc, which we don't use.
 
 	req := &gomemcached.MCRequest{
 		Opcode:  gomemcached.UPR_STREAMREQ,
