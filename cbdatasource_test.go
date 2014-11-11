@@ -189,6 +189,61 @@ type RWRes struct {
 
 // ------------------------------------------------------
 
+func TestExponentialBackoffLoop(t *testing.T) {
+	called := 0
+	ExponentialBackoffLoop("test", func() int {
+		called += 1
+		return -1
+	}, 0, 0, 0)
+	if called != 1 {
+		t.Errorf("expected 1 call")
+	}
+
+	called = 0
+	ExponentialBackoffLoop("test", func() int {
+		called += 1
+		if called <= 1 {
+			return 1
+		}
+		return -1
+	}, 0, 0, 0)
+	if called != 2 {
+		t.Errorf("expected 2 calls")
+	}
+
+	called = 0
+	ExponentialBackoffLoop("test", func() int {
+		called += 1
+		if called == 1 {
+			return 1
+		}
+		if called == 2 {
+			return 0
+		}
+		return -1
+	}, 0, 0, 0)
+	if called != 3 {
+		t.Errorf("expected 2 calls")
+	}
+
+	called = 0
+	ExponentialBackoffLoop("test", func() int {
+		called += 1
+		if called == 1 {
+			return 1
+		}
+		if called == 2 {
+			return 0
+		}
+		return -1
+	}, 1, 100000.0, 1)
+	if called != 3 {
+		t.Errorf("expected 2 calls")
+	}
+}
+
+// ------------------------------------------------------
+
 func TestNewBucketDataSource(t *testing.T) {
 	serverURLs := []string(nil)
 	bucketUUID := ""
