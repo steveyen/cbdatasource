@@ -1193,7 +1193,7 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 }
 
 func (d *bucketDataSource) Stats(dest *BucketDataSourceStats) error {
-	d.stats.AtomicCopyTo(dest)
+	d.stats.AtomicCopyTo(dest, nil)
 	return nil
 }
 
@@ -1318,9 +1318,17 @@ func ParseFailOverLog(body []byte) ([][]uint64, error) {
 
 // --------------------------------------------------------------
 
-func (s *BucketDataSourceStats) AtomicCopyTo(r *BucketDataSourceStats) {
+// Copies metrics from s to r, and also applies an optional function
+// (fn).  The fn is invoked with metrics from s and r, and can be used
+// to compute additions, subtractions, negations, etc.  The default
+// when fn is nil just uses the metrics from s.
+func (s *BucketDataSourceStats) AtomicCopyTo(r *BucketDataSourceStats,
+	fn func(sv uint64, rv uint64) uint64) {
 	// Using reflection rather than a whole slew of explicit
 	// invocations of atomic.LoadUint64()/StoreUint64()'s.
+	if fn == nil {
+		fn = func(sv uint64, rv uint64) uint64 { return sv }
+	}
 	rve := reflect.ValueOf(r).Elem()
 	sve := reflect.ValueOf(s).Elem()
 	svet := sve.Type()
@@ -1330,8 +1338,9 @@ func (s *BucketDataSourceStats) AtomicCopyTo(r *BucketDataSourceStats) {
 		if rvef.CanAddr() && svef.CanAddr() {
 			rvefp := rvef.Addr().Interface()
 			svefp := svef.Addr().Interface()
-			v := atomic.LoadUint64(svefp.(*uint64))
-			atomic.StoreUint64(rvefp.(*uint64), v)
+			rv := atomic.LoadUint64(rvefp.(*uint64))
+			sv := atomic.LoadUint64(svefp.(*uint64))
+			atomic.StoreUint64(rvefp.(*uint64), fn(sv, rv))
 		}
 	}
 }

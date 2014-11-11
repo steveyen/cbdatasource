@@ -309,7 +309,7 @@ func TestBucketDataSourceStatsAtomicCopyTo(t *testing.T) {
 		TotSetVBucketMetaDataMarshalErr: 0x1f2f3f4f00001111,
 	}
 	x := &BucketDataSourceStats{}
-	b.AtomicCopyTo(x)
+	b.AtomicCopyTo(x, nil)
 	if x.TotSetVBucketMetaDataMarshalErr != b.TotSetVBucketMetaDataMarshalErr {
 		t.Errorf("expected copy to work, x: %#v vs b: %#v", x, b)
 	}
