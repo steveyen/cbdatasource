@@ -823,6 +823,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				atomic.AddUint64(&d.stats.TotWorkerHandleRecvErr, 1)
 				return cleanup(progress, err)
 			}
+
 			atomic.AddUint64(&d.stats.TotWorkerHandleRecvOk, 1)
 
 		case wantVBucketIds, alive := <-workerCh:
