@@ -859,6 +859,42 @@ func TestUPROpenStreamReq(t *testing.T) {
 	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
 
 	// ------------------------------------------------------------
+	receiver.m.Lock()
+	if len(receiver.muts) != 0 {
+		t.Errorf("expected 0 muts")
+	}
+	receiver.m.Unlock()
+
+	req = &gomemcached.MCRequest{
+		Opcode:  gomemcached.UPR_MUTATION,
+		VBucket: 2,
+		Extras:  make([]byte, 8),
+		Body:    []byte("hello"),
+	}
+	binary.BigEndian.PutUint64(req.Extras, 102034)
+
+	hb := req.HeaderBytes()
+	bb := make([]byte, len(hb) - 24 + len(res.Body))
+	copy(bb, hb[24:])
+	copy(bb[len(hb) - 24:], res.Body)
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, hb[:24])
+	reqR.resCh <- RWRes{n: len(hb), err: nil}
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, bb)
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	runtime.Gosched()
+
+	receiver.m.Lock()
+	if len(receiver.muts) != 1 {
+		t.Errorf("expected 1 muts")
+	}
+	receiver.m.Unlock()
+
+	// ------------------------------------------------------------
 	err = bds.Close()
 	if err != nil {
 		t.Errorf("expected clean Close(), got err: %v", err)
@@ -883,8 +919,8 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if err != nil || vbmd == nil {
 		t.Errorf("expected gvbmd to work")
 	}
-	if lastSeq != 0 {
-		t.Errorf("expected lastseq of 0")
+	if lastSeq != 102034 {
+		t.Errorf("expected lastseq of 102034, got %d", lastSeq)
 	}
 	if len(vbmd.FailOverLog) != 1 ||
 		len(vbmd.FailOverLog[0]) != 2 ||
