@@ -244,6 +244,13 @@ func TestExponentialBackoffLoop(t *testing.T) {
 
 // ------------------------------------------------------
 
+func TestParseFailOverLog(t *testing.T) {
+	f, err := ParseFailOverLog([]byte("hi"))
+	if err == nil || f != nil {
+		t.Errorf("expected ParseFailOverLog nil to fail")
+	}
+}
+
 func TestNewBucketDataSource(t *testing.T) {
 	serverURLs := []string(nil)
 	bucketUUID := ""
