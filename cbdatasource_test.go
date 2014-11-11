@@ -931,7 +931,8 @@ func TestUPROpenStreamReq(t *testing.T) {
 		Opcode:  gomemcached.UPR_MUTATION,
 		VBucket: 2,
 		Extras:  make([]byte, 8),
-		Body:    []byte("hello"),
+		Key:     []byte("hello"),
+		Body:    []byte("world"),
 	}
 	binary.BigEndian.PutUint64(req.Extras, 102034)
 
@@ -953,6 +954,66 @@ func TestUPROpenStreamReq(t *testing.T) {
 	receiver.m.Lock()
 	if len(receiver.muts) != 1 {
 		t.Errorf("expected 1 muts")
+	}
+	receiver.m.Unlock()
+
+	// ------------------------------------------------------------
+	req = &gomemcached.MCRequest{
+		Opcode:  gomemcached.UPR_DELETION,
+		VBucket: 2,
+		Key:     []byte("goodbye"),
+		Extras:  make([]byte, 8),
+	}
+	binary.BigEndian.PutUint64(req.Extras, 102035)
+
+	hb = req.HeaderBytes()
+	bb = make([]byte, len(hb) - 24 + len(res.Body))
+	copy(bb, hb[24:])
+	copy(bb[len(hb) - 24:], res.Body)
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, hb[:24])
+	reqR.resCh <- RWRes{n: len(hb), err: nil}
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, bb)
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	runtime.Gosched()
+
+	receiver.m.Lock()
+	if len(receiver.muts) != 2 {
+		t.Errorf("expected 2 muts")
+	}
+	receiver.m.Unlock()
+
+	// ------------------------------------------------------------
+	req = &gomemcached.MCRequest{
+		Opcode:  gomemcached.UPR_EXPIRATION,
+		VBucket: 2,
+		Key:     []byte("overdue"),
+		Extras:  make([]byte, 8),
+	}
+	binary.BigEndian.PutUint64(req.Extras, 102036)
+
+	hb = req.HeaderBytes()
+	bb = make([]byte, len(hb) - 24 + len(res.Body))
+	copy(bb, hb[24:])
+	copy(bb[len(hb) - 24:], res.Body)
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, hb[:24])
+	reqR.resCh <- RWRes{n: len(hb), err: nil}
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, bb)
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	runtime.Gosched()
+
+	receiver.m.Lock()
+	if len(receiver.muts) != 3 {
+		t.Errorf("expected 3 muts")
 	}
 	receiver.m.Unlock()
 
@@ -981,8 +1042,8 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if err != nil || vbmd == nil {
 		t.Errorf("expected gvbmd to work")
 	}
-	if lastSeq != 102034 {
-		t.Errorf("expected lastseq of 102034, got %d", lastSeq)
+	if lastSeq != 102036 {
+		t.Errorf("expected lastseq of 102036, got %d", lastSeq)
 	}
 	if len(vbmd.FailOverLog) != 1 ||
 		len(vbmd.FailOverLog[0]) != 2 ||
