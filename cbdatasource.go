@@ -181,6 +181,8 @@ type Bucket interface {
 	VBServerMap() *couchbase.VBucketServerMap
 }
 
+// DefaultBucketDataSourceOptions defines the default options that
+// will be used if nil is provided to NewBucketDataSource().
 var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 	ClusterManagerBackoffFactor: 1.5,
 	ClusterManagerSleepInitMS:   100,
@@ -349,23 +351,24 @@ type bucketDataSource struct {
 	vbm  *couchbase.VBucketServerMap
 }
 
-// NewBucketDataSource() is the main entry point for the cbdatasource
-// API.  The application must supply an array of 1 or more serverURLs
-// (or "seed" URL's) to Couchbase Server cluster-manager REST URL
-// endpoints, like "http://localhost:8091".  The BucketDataSource
-// (after Start()'ing) will try each serverURL, in turn, until it can
-// get a successful cluster map.  Additionally, the application must
-// supply a poolName & bucketName from where the BucketDataSource will
-// retrieve data.  The optional bucketUUID is double-checked by the
-// BucketDataSource to ensure we have the correct bucket, and a
-// bucketUUID of "" means skip the bucketUUID validation.  An optional
-// array of vbucketID numbers allows the application to specify which
-// vbuckets to retrieve; and the vbucketIDs array can be nil which
-// means all vbuckets are retrieved by the BucketDataSource.  The
-// application must supply its own implementation of the Receiver
-// interface (see the example program as a sample).  The optional
-// options parameter (which may be nil) allows the application to
-// specify advanced parameters like backoff and retry-sleep values.
+// NewBucketDataSource is the main starting point for using the
+// cbdatasource API.  The application must supply an array of 1 or
+// more serverURLs (or "seed" URL's) to Couchbase Server
+// cluster-manager REST URL endpoints, like "http://localhost:8091".
+// The BucketDataSource (after Start()'ing) will try each serverURL,
+// in turn, until it can get a successful cluster map.  Additionally,
+// the application must supply a poolName & bucketName from where the
+// BucketDataSource will retrieve data.  The optional bucketUUID is
+// double-checked by the BucketDataSource to ensure we have the
+// correct bucket, and a bucketUUID of "" means skip the bucketUUID
+// validation.  An optional array of vbucketID numbers allows the
+// application to specify which vbuckets to retrieve; and the
+// vbucketIDs array can be nil which means all vbuckets are retrieved
+// by the BucketDataSource.  The application must supply its own
+// implementation of the Receiver interface (see the example program
+// as a sample).  The optional options parameter (which may be nil)
+// allows the application to specify advanced parameters like backoff
+// and retry-sleep values.
 func NewBucketDataSource(serverURLs []string,
 	poolName, bucketName, bucketUUID string,
 	vbucketIDs []uint16, authFunc AuthFunc,
@@ -407,7 +410,7 @@ func (d *bucketDataSource) Start() error {
 	d.m.Lock()
 	if d.life != "" {
 		d.m.Unlock()
-		return fmt.Errorf("Start() called in wrong state: %s", d.life)
+		return fmt.Errorf("call to Start() in wrong state: %s", d.life)
 	}
 	d.life = "running"
 	d.m.Unlock()
@@ -786,7 +789,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 				if err != nil {
 					atomic.AddUint64(&d.stats.TotUPRDataChangeErr, 1)
-					d.receiver.OnError(fmt.Errorf("DataChange, err: %v", err))
+					d.receiver.OnError(fmt.Errorf("error: DataChange, err: %v", err))
 					return
 				}
 
@@ -899,7 +902,7 @@ func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
 		}
 	}
 
-	for wantVBucketID, _ := range wantVBucketIDs {
+	for wantVBucketID := range wantVBucketIDs {
 		state := currVBucketIDs[wantVBucketID]
 		if state == "closing" {
 			// A UPR_CLOSESTREAM request is already on the wire, so
@@ -1225,7 +1228,7 @@ func (d *bucketDataSource) Close() error {
 	d.m.Lock()
 	if d.life != "running" {
 		d.m.Unlock()
-		return fmt.Errorf("Close() called when not in running state: %s", d.life)
+		return fmt.Errorf("call to Close() when not running state: %s", d.life)
 	}
 	d.life = "closed"
 	d.m.Unlock()
@@ -1381,11 +1384,14 @@ func (s *BucketDataSourceStats) AtomicCopyTo(r *BucketDataSourceStats,
 
 // --------------------------------------------------------------
 
-// Calls f() in a loop, sleeping in an exponential backoff if needed.
-// The provided f() function should return < 0 to stop the loop; >= 0
-// to continue the loop, where > 0 means there was progress which
-// allows an immediate retry of f() with no sleeping.  A return of < 0
-// is useful when f() will never make any future progress.
+// ExponentialBackoffLoop invokes f() in a loop, sleeping in an
+// exponential number of milliseconds in between invocations if
+// needed.  The provided f() function should return < 0 to stop the
+// loop; >= 0 to continue the loop, where > 0 means there was progress
+// which allows an immediate retry of f() with no sleeping.  A return
+// of < 0 is useful when f() will never make any future progress.
+// Repeated attempts with no progress will have exponential backoff
+// sleep times.
 func ExponentialBackoffLoop(name string,
 	f func() int,
 	startSleepMS int,

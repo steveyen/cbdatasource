@@ -46,7 +46,7 @@ func (bw *TestBucket) VBServerMap() *couchbase.VBucketServerMap {
 
 type TestMutation struct {
 	delete    bool
-	vbucketId uint16
+	vbucketID uint16
 	key       []byte
 	seq       uint64
 }
@@ -73,41 +73,41 @@ func (r *TestReceiver) OnError(err error) {
 	r.errs = append(r.errs, err)
 }
 
-func (r *TestReceiver) DataUpdate(vbucketId uint16, key []byte, seq uint64,
+func (r *TestReceiver) DataUpdate(vbucketID uint16, key []byte, seq uint64,
 	req *gomemcached.MCRequest) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 
 	r.muts = append(r.muts, &TestMutation{
 		delete:    false,
-		vbucketId: vbucketId,
+		vbucketID: vbucketID,
 		key:       key,
 		seq:       seq,
 	})
 	return nil
 }
 
-func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
+func (r *TestReceiver) DataDelete(vbucketID uint16, key []byte, seq uint64,
 	req *gomemcached.MCRequest) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 
 	r.muts = append(r.muts, &TestMutation{
 		delete:    true,
-		vbucketId: vbucketId,
+		vbucketID: vbucketID,
 		key:       key,
 		seq:       seq,
 	})
 	return nil
 }
 
-func (r *TestReceiver) SnapshotStart(vbucketId uint16,
+func (r *TestReceiver) SnapshotStart(vbucketID uint16,
 	snapStart, snapEnd uint64, snapType uint32) error {
 	r.numSnapshotStarts++
 	return nil
 }
 
-func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
+func (r *TestReceiver) SetMetaData(vbucketID uint16, value []byte) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 
@@ -115,28 +115,28 @@ func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
 	if r.meta == nil {
 		r.meta = make(map[uint16][]byte)
 	}
-	r.meta[vbucketId] = value
+	r.meta[vbucketID] = value
 	return nil
 }
 
-func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error) {
+func (r *TestReceiver) GetMetaData(vbucketID uint16) (value []byte, lastSeq uint64, err error) {
 	r.m.Lock()
 	defer r.m.Unlock()
 
 	r.numGetMetaDatas++
 	rv := []byte(nil)
 	if r.meta != nil {
-		rv = r.meta[vbucketId]
+		rv = r.meta[vbucketID]
 	}
 	for i := len(r.muts) - 1; i >= 0; i = i - 1 {
-		if r.muts[i].vbucketId == vbucketId {
+		if r.muts[i].vbucketID == vbucketID {
 			return rv, r.muts[i].seq, nil
 		}
 	}
 	return rv, 0, nil
 }
 
-func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
+func (r *TestReceiver) Rollback(vbucketID uint16, rollbackSeq uint64) error {
 	r.numRollbacks++
 	return fmt.Errorf("bad-rollback")
 }
@@ -254,43 +254,43 @@ func TestParseFailOverLog(t *testing.T) {
 func TestNewBucketDataSource(t *testing.T) {
 	serverURLs := []string(nil)
 	bucketUUID := ""
-	vbucketIds := []uint16(nil)
+	vbucketIDs := []uint16(nil)
 	var authFunc AuthFunc
 	var receiver Receiver
 	var options *BucketDataSourceOptions
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
 
 	serverURLs = []string{"foo"}
 	bucketUUID = ""
-	vbucketIds = []uint16(nil)
+	vbucketIDs = []uint16(nil)
 	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
 
 	poolName := ""
 	bds, err = NewBucketDataSource(serverURLs, poolName, "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
 
 	bucketName := ""
 	bds, err = NewBucketDataSource(serverURLs, "poolName", bucketName, bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
 
 	receiver = &TestReceiver{testName: "TestNewBucketDataSource"}
 	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err")
 	}
@@ -333,7 +333,7 @@ func TestImmediateStartClose(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
-	vbucketIds := []uint16(nil)
+	vbucketIDs := []uint16(nil)
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
 	options := &BucketDataSourceOptions{
@@ -342,7 +342,7 @@ func TestImmediateStartClose(t *testing.T) {
 	}
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestErrOnConnectBucket(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
-	vbucketIds := []uint16(nil)
+	vbucketIDs := []uint16(nil)
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
 	options := &BucketDataSourceOptions{
@@ -434,7 +434,7 @@ func TestErrOnConnectBucket(t *testing.T) {
 	}
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestWrongBucketUUID(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := "not-a-good-uuid"
-	vbucketIds := []uint16(nil)
+	vbucketIDs := []uint16(nil)
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
 	options := &BucketDataSourceOptions{
@@ -483,7 +483,7 @@ func TestWrongBucketUUID(t *testing.T) {
 	}
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
-	vbucketIds := []uint16(nil)
+	vbucketIDs := []uint16(nil)
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestNewBucketDataSource"}
 	options := &BucketDataSourceOptions{
@@ -543,7 +543,7 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	connectBucketCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestConnectError(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
-	vbucketIds := []uint16{0, 1, 2, 3}
+	vbucketIDs := []uint16{0, 1, 2, 3}
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
@@ -617,7 +617,7 @@ func TestConnectError(t *testing.T) {
 	connectCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -679,7 +679,7 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
-	vbucketIds := []uint16{0, 1, 2, 3}
+	vbucketIDs := []uint16{0, 1, 2, 3}
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
@@ -704,7 +704,7 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	connectCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -790,7 +790,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
-	vbucketIds := []uint16{2}
+	vbucketIDs := []uint16{2}
 	var authFunc AuthFunc
 	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
@@ -815,7 +815,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 	connectCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIds, authFunc, receiver, options)
+		vbucketIDs, authFunc, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -870,7 +870,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 		t.Errorf("expected upr-streamreq, got: %#v", req)
 	}
 	if req.VBucket != 2 {
-		t.Errorf("expected vbucketId 2, got: %#v", req)
+		t.Errorf("expected vbucketID 2, got: %#v", req)
 	}
 	if req.Opaque != 2 {
 		t.Errorf("expected opaque 2, got: %#v", req)
