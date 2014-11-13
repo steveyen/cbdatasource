@@ -12,10 +12,11 @@
 // Package cbdatasource streams data from a Couchbase cluster.  It is
 // implemented using Couchbase DCP protocol and has auto-reconnecting
 // and auto-restarting goroutines underneath the hood to provide a
-// simple cluster-wide abstraction, so your application does not need
-// to worry about individual connctions to server nodes and cluster
-// topology changes, like rebalance & failovers.  The API starting
-// point is NewBucketDataSource().
+// simple, high-level cluster-wide abstraction.  By using
+// cbdatasource, your application does not need to worry about
+// connections or reconnections to individual server nodes or cluster
+// topology changes, rebalance & failovers.  The API starting point is
+// NewBucketDataSource().
 package cbdatasource
 
 import (
