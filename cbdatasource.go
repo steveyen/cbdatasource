@@ -34,7 +34,8 @@ import (
 	"github.com/couchbaselabs/go-couchbase"
 )
 
-// This is the main interface returned by NewBucketDataSource().
+// BucketDataSource is the main control interface returned by
+// NewBucketDataSource().
 type BucketDataSource interface {
 	// Use Start() to kickoff connectivity to a Couchbase cluster,
 	// after which calls will be made to the Receiver's methods.
@@ -51,11 +52,11 @@ type BucketDataSource interface {
 	Close() error
 }
 
-// Interface implemented by the application, or the receiver of data.
-// Calls to methods on this interface may be made by the
-// BucketDataSource using multiple, concurrent goroutines, so the
-// application should implement its own Receiver-side synchronizations
-// if needed.
+// A Receiver interface is implemented by the application, or the
+// receiver of data.  Calls to methods on this interface will be made
+// by the BucketDataSource using multiple, concurrent goroutines, so
+// the application should implement its own Receiver-side
+// synchronizations if needed.
 type Receiver interface {
 	// Invoked in advisory fashion by the BucketDataSource when it
 	// encounters an error.  The BucketDataSource will continue to try
@@ -67,13 +68,13 @@ type Receiver interface {
 	// Invoked by the BucketDataSource when it has received a mutation
 	// from the data source.  Receiver implementation is responsible
 	// for making its own copies of the key and request.
-	DataUpdate(vbucketId uint16, key []byte, seq uint64,
+	DataUpdate(vbucketID uint16, key []byte, seq uint64,
 		r *gomemcached.MCRequest) error
 
 	// Invoked by the BucketDataSource when it has received a deletion
 	// or expiration from the data source.  Receiver implementation is
 	// responsible for making its own copies of the key and request.
-	DataDelete(vbucketId uint16, key []byte, seq uint64,
+	DataDelete(vbucketID uint16, key []byte, seq uint64,
 		r *gomemcached.MCRequest) error
 
 	// An callback invoked by the BucketDataSource when it has
@@ -81,16 +82,16 @@ type Receiver interface {
 	// Receiver implementation, for example, might choose to optimize
 	// persistence perhaps by preparing a batch write to
 	// application-specific storage.
-	SnapshotStart(vbucketId uint16, snapStart, snapEnd uint64, snapType uint32) error
+	SnapshotStart(vbucketID uint16, snapStart, snapEnd uint64, snapType uint32) error
 
 	// The Receiver should persist the value parameter of
 	// SetMetaData() for retrieval during some future call to
 	// GetMetaData() by the BucketDataSource.  The metadata value
 	// should be considered "in-stream", or as part of the sequence
 	// history of mutations.  That is, a later Rollback() to some
-	// previous sequence number for a particular vbucketId should
+	// previous sequence number for a particular vbucketID should
 	// rollback both persisted metadata and regular data.
-	SetMetaData(vbucketId uint16, value []byte) error
+	SetMetaData(vbucketID uint16, value []byte) error
 
 	// GetMetaData() should return the opaque value previously
 	// provided by an earlier call to SetMetaData().  If there was no
@@ -100,14 +101,16 @@ type Receiver interface {
 	// for (value, lastSeq, err), respectively.  The lastSeq should be
 	// the last sequence number received and persisted during calls to
 	// the Receiver's DataUpdate() & DataDelete() methods.
-	GetMetaData(vbucketId uint16) (value []byte, lastSeq uint64, err error)
+	GetMetaData(vbucketID uint16) (value []byte, lastSeq uint64, err error)
 
 	// Invoked by the BucketDataSource when the datasource signals a
 	// rollback during stream initialization.  Note that both data and
 	// metadata should be rolled back.
-	Rollback(vbucketId uint16, rollbackSeq uint64) error
+	Rollback(vbucketID uint16, rollbackSeq uint64) error
 }
 
+// BucketDataSourceOptions allows the application to provide
+// configuration settings to NewBucketDataSource().
 type BucketDataSourceOptions struct {
 	// Optional - used during UPR_OPEN stream start.  If empty a
 	// random name will be automatically generated.
@@ -141,7 +144,7 @@ type BucketDataSourceOptions struct {
 	FeedBufferAckThreshold float32
 
 	// Used for applications like backup which wish to control the
-	// last sequence number provided.  Key is vbucketId, value is seqEnd.
+	// last sequence number provided.  Key is vbucketID, value is seqEnd.
 	SeqEnd map[uint16]uint64
 
 	// Optional function to connect to a couchbase cluster manager bucket.
@@ -154,8 +157,13 @@ type BucketDataSourceOptions struct {
 	Connect func(protocol, dest string) (*memcached.Client, error)
 }
 
-// Error type passed to Receiver.OnError() when the BucketDataSource
-// failed to connect to all serverURLs.
+// AllServerURLsConnectBucketError is the error type passed to
+// Receiver.OnError() when the BucketDataSource failed to connect to
+// all the serverURL's provided as a parameter to
+// NewBucketDataSource().  The application, for example, may choose to
+// BucketDataSource.Close() based on this error.  Otherwise, the
+// BucketDataSource will backoff and retry reconnecting to the
+// serverURL's.
 type AllServerURLsConnectBucketError struct {
 	ServerURLs []string
 }
@@ -164,6 +172,9 @@ func (e *AllServerURLsConnectBucketError) Error() string {
 	return fmt.Sprintf("could not connect to any serverURL: %#v", e.ServerURLs)
 }
 
+// A Bucket interface defines the set of methods that cbdatasource
+// needs from an abstract couchbase.Bucket.  This separate interface
+// allows for easier testability.
 type Bucket interface {
 	Close()
 	GetUUID() string
@@ -183,9 +194,9 @@ var DefaultBucketDataSourceOptions = &BucketDataSourceOptions{
 	FeedBufferAckThreshold: 0.2,
 }
 
-// See the BucketDataSource.Stats() method for how to retrieve stat
-// metrics from a BucketDataSource.  All the metrics here prefixed
-// with "Tot" are monotonic counters: they only increase.
+// BucketDataSourceStats is filled by the BucketDataSource.Stats()
+// method.  All the metrics here prefixed with "Tot" are monotonic
+// counters: they only increase.
 type BucketDataSourceStats struct {
 	TotStart  uint64
 	TotKick   uint64
@@ -207,7 +218,7 @@ type BucketDataSourceStats struct {
 
 	TotRefreshWorkers                uint64
 	TotRefreshWorkersVBMNilErr       uint64
-	TotRefreshWorkersVBucketIdErr    uint64
+	TotRefreshWorkersVBucketIDErr    uint64
 	TotRefreshWorkersServerIdxsErr   uint64
 	TotRefreshWorkersMasterIdxErr    uint64
 	TotRefreshWorkersMasterServerErr uint64
@@ -300,11 +311,15 @@ type BucketDataSourceStats struct {
 	TotSetVBucketMetaDataOk         uint64
 }
 
+// AuthFunc is the optional callback the application may provide when
+// the BucketDataSource needs to connect or reconnect to a Couchbase
+// cluster.
 type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
 
 // --------------------------------------------------------
 
-// This internal struct is exposed to enable json marshaling.
+// VBucketMetaData is an internal struct is exposed to enable json
+// marshaling.
 type VBucketMetaData struct {
 	SeqStart    uint64     `json:"seqStart"`
 	SeqEnd      uint64     `json:"seqEnd"`
@@ -318,7 +333,7 @@ type bucketDataSource struct {
 	poolName   string
 	bucketName string
 	bucketUUID string
-	vbucketIds []uint16
+	vbucketIDs []uint16
 	authFunc   AuthFunc
 	receiver   Receiver
 	options    *BucketDataSourceOptions
@@ -334,8 +349,9 @@ type bucketDataSource struct {
 	vbm  *couchbase.VBucketServerMap
 }
 
-// The application must supply an array of 1 or more serverURLs (or
-// "seed" URL's) to Couchbase Server cluster-manager REST URL
+// NewBucketDataSource() is the main entry point for the cbdatasource
+// API.  The application must supply an array of 1 or more serverURLs
+// (or "seed" URL's) to Couchbase Server cluster-manager REST URL
 // endpoints, like "http://localhost:8091".  The BucketDataSource
 // (after Start()'ing) will try each serverURL, in turn, until it can
 // get a successful cluster map.  Additionally, the application must
@@ -343,8 +359,8 @@ type bucketDataSource struct {
 // retrieve data.  The optional bucketUUID is double-checked by the
 // BucketDataSource to ensure we have the correct bucket, and a
 // bucketUUID of "" means skip the bucketUUID validation.  An optional
-// array of vbucketId numbers allows the application to specify which
-// vbuckets to retrieve; and the vbucketIds array can be nil which
+// array of vbucketID numbers allows the application to specify which
+// vbuckets to retrieve; and the vbucketIDs array can be nil which
 // means all vbuckets are retrieved by the BucketDataSource.  The
 // application must supply its own implementation of the Receiver
 // interface (see the example program as a sample).  The optional
@@ -352,7 +368,7 @@ type bucketDataSource struct {
 // specify advanced parameters like backoff and retry-sleep values.
 func NewBucketDataSource(serverURLs []string,
 	poolName, bucketName, bucketUUID string,
-	vbucketIds []uint16, authFunc AuthFunc,
+	vbucketIDs []uint16, authFunc AuthFunc,
 	receiver Receiver, options *BucketDataSourceOptions) (BucketDataSource, error) {
 	if len(serverURLs) < 1 {
 		return nil, fmt.Errorf("missing at least 1 serverURL")
@@ -374,7 +390,7 @@ func NewBucketDataSource(serverURLs []string,
 		poolName:   poolName,
 		bucketName: bucketName,
 		bucketUUID: bucketUUID,
-		vbucketIds: vbucketIds,
+		vbucketIDs: vbucketIDs,
 		authFunc:   authFunc,
 		receiver:   receiver,
 		options:    options,
@@ -515,7 +531,7 @@ func (d *bucketDataSource) refreshCluster() int {
 }
 
 func (d *bucketDataSource) refreshWorkers() {
-	// Keyed by server, value is chan of array of vbucketId's that the
+	// Keyed by server, value is chan of array of vbucketID's that the
 	// worker needs to provide.
 	workers := make(map[string]chan []uint16)
 
@@ -531,60 +547,60 @@ func (d *bucketDataSource) refreshWorkers() {
 			continue
 		}
 
-		// If nil vbucketIds, then default to all vbucketIds.
-		vbucketIds := d.vbucketIds
-		if vbucketIds == nil {
-			vbucketIds = make([]uint16, len(vbm.VBucketMap))
-			for i := 0; i < len(vbucketIds); i++ {
-				vbucketIds[i] = uint16(i)
+		// If nil vbucketIDs, then default to all vbucketIDs.
+		vbucketIDs := d.vbucketIDs
+		if vbucketIDs == nil {
+			vbucketIDs = make([]uint16, len(vbm.VBucketMap))
+			for i := 0; i < len(vbucketIDs); i++ {
+				vbucketIDs[i] = uint16(i)
 			}
 		}
 
-		// Group the wanted vbucketIds by server.
-		vbucketIdsByServer := make(map[string][]uint16)
+		// Group the wanted vbucketIDs by server.
+		vbucketIDsByServer := make(map[string][]uint16)
 
-		for _, vbucketId := range vbucketIds {
-			if int(vbucketId) >= len(vbm.VBucketMap) {
-				atomic.AddUint64(&d.stats.TotRefreshWorkersVBucketIdErr, 1)
+		for _, vbucketID := range vbucketIDs {
+			if int(vbucketID) >= len(vbm.VBucketMap) {
+				atomic.AddUint64(&d.stats.TotRefreshWorkersVBucketIDErr, 1)
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" saw bad vbucketId: %d, vbm: %#v",
-					vbucketId, vbm))
+					" saw bad vbucketID: %d, vbm: %#v",
+					vbucketID, vbm))
 				continue
 			}
-			serverIdxs := vbm.VBucketMap[vbucketId]
+			serverIdxs := vbm.VBucketMap[vbucketID]
 			if serverIdxs == nil || len(serverIdxs) <= 0 {
 				atomic.AddUint64(&d.stats.TotRefreshWorkersServerIdxsErr, 1)
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" no serverIdxs for vbucketId: %d, vbm: %#v",
-					vbucketId, vbm))
+					" no serverIdxs for vbucketID: %d, vbm: %#v",
+					vbucketID, vbm))
 				continue
 			}
 			masterIdx := serverIdxs[0]
 			if int(masterIdx) >= len(vbm.ServerList) {
 				atomic.AddUint64(&d.stats.TotRefreshWorkersMasterIdxErr, 1)
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" no masterIdx for vbucketId: %d, vbm: %#v",
-					vbucketId, vbm))
+					" no masterIdx for vbucketID: %d, vbm: %#v",
+					vbucketID, vbm))
 				continue
 			}
 			masterServer := vbm.ServerList[masterIdx]
 			if masterServer == "" {
 				atomic.AddUint64(&d.stats.TotRefreshWorkersMasterServerErr, 1)
 				d.receiver.OnError(fmt.Errorf("refreshWorkers"+
-					" no masterServer for vbucketId: %d, vbm: %#v",
-					vbucketId, vbm))
+					" no masterServer for vbucketID: %d, vbm: %#v",
+					vbucketID, vbm))
 				continue
 			}
-			v, exists := vbucketIdsByServer[masterServer]
+			v, exists := vbucketIDsByServer[masterServer]
 			if !exists || v == nil {
 				v = []uint16{}
 			}
-			vbucketIdsByServer[masterServer] = append(v, vbucketId)
+			vbucketIDsByServer[masterServer] = append(v, vbucketID)
 		}
 
 		// Remove any extraneous workers.
 		for server, workerCh := range workers {
-			if _, exists := vbucketIdsByServer[server]; !exists {
+			if _, exists := vbucketIDsByServer[server]; !exists {
 				atomic.AddUint64(&d.stats.TotRefreshWorkersRemoveWorker, 1)
 				delete(workers, server)
 				close(workerCh)
@@ -592,8 +608,8 @@ func (d *bucketDataSource) refreshWorkers() {
 		}
 
 		// Add any missing workers and update workers with their
-		// latest vbucketIds.
-		for server, serverVBucketIds := range vbucketIdsByServer {
+		// latest vbucketIDs.
+		for server, serverVBucketIDs := range vbucketIDsByServer {
 			workerCh, exists := workers[server]
 			if !exists || workerCh == nil {
 				atomic.AddUint64(&d.stats.TotRefreshWorkersAddWorker, 1)
@@ -602,7 +618,7 @@ func (d *bucketDataSource) refreshWorkers() {
 				d.workerStart(server, workerCh)
 			}
 
-			workerCh <- serverVBucketIds
+			workerCh <- serverVBucketIDs
 			atomic.AddUint64(&d.stats.TotRefreshWorkersKickWorker, 1)
 		}
 	}
@@ -752,20 +768,20 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				// goroutine instead of sending over the recvCh.
 				atomic.AddUint64(&d.stats.TotUPRDataChange, 1)
 
-				vbucketId := pkt.VBucket
+				vbucketID := pkt.VBucket
 
 				seq := binary.BigEndian.Uint64(pkt.Extras[:8])
 
 				if pkt.Opcode == gomemcached.UPR_MUTATION {
 					atomic.AddUint64(&d.stats.TotUPRDataChangeMutation, 1)
-					err = d.receiver.DataUpdate(vbucketId, pkt.Key, seq, &pkt)
+					err = d.receiver.DataUpdate(vbucketID, pkt.Key, seq, &pkt)
 				} else {
 					if pkt.Opcode == gomemcached.UPR_DELETION {
 						atomic.AddUint64(&d.stats.TotUPRDataChangeDeletion, 1)
 					} else {
 						atomic.AddUint64(&d.stats.TotUPRDataChangeExpiration, 1)
 					}
-					err = d.receiver.DataDelete(vbucketId, pkt.Key, seq, &pkt)
+					err = d.receiver.DataDelete(vbucketID, pkt.Key, seq, &pkt)
 				}
 
 				if err != nil {
@@ -800,9 +816,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 		}
 	}()
 
-	// Values for vbucketId state in currVBucketIds:
+	// Values for vbucketID state in currVBucketIDs:
 	// "" (dead/closed/unknown), "requested", "running", "closing".
-	currVBucketIds := map[uint16]string{}
+	currVBucketIDs := map[uint16]string{}
 
 	atomic.AddUint64(&d.stats.TotWorkerBodyKick, 1)
 	d.Kick("new-worker")
@@ -825,7 +841,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				return cleanup(1, nil) // We saw disconnect; assume we made progress.
 			}
 
-			progress, err := d.handleRecv(sendCh, currVBucketIds, res)
+			progress, err := d.handleRecv(sendCh, currVBucketIDs, res)
 			if err != nil {
 				atomic.AddUint64(&d.stats.TotWorkerHandleRecvErr, 1)
 				return cleanup(progress, err)
@@ -833,7 +849,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 			atomic.AddUint64(&d.stats.TotWorkerHandleRecvOk, 1)
 
-		case wantVBucketIds, alive := <-workerCh:
+		case wantVBucketIDs, alive := <-workerCh:
 			atomic.AddUint64(&d.stats.TotRefreshWorker, 1)
 
 			if !alive {
@@ -842,7 +858,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			}
 
 			progress, err :=
-				d.refreshWorker(sendCh, currVBucketIds, wantVBucketIds)
+				d.refreshWorker(sendCh, currVBucketIDs, wantVBucketIDs)
 			if err != nil {
 				return cleanup(progress, err)
 			}
@@ -855,46 +871,46 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 }
 
 func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
-	currVBucketIds map[uint16]string, wantVBucketIdsArr []uint16) (
+	currVBucketIDs map[uint16]string, wantVBucketIDsArr []uint16) (
 	progress int, err error) {
 	// Convert to map for faster lookup.
-	wantVBucketIds := map[uint16]bool{}
-	for _, wantVBucketId := range wantVBucketIdsArr {
-		wantVBucketIds[wantVBucketId] = true
+	wantVBucketIDs := map[uint16]bool{}
+	for _, wantVBucketID := range wantVBucketIDsArr {
+		wantVBucketIDs[wantVBucketID] = true
 	}
 
-	for currVBucketId, state := range currVBucketIds {
-		if !wantVBucketIds[currVBucketId] {
+	for currVBucketID, state := range currVBucketIDs {
+		if !wantVBucketIDs[currVBucketID] {
 			if state == "requested" {
 				// A UPR_STREAMREQ request is already on the wire, so
 				// error rather than have complex compensation logic.
 				atomic.AddUint64(&d.stats.TotWantCloseRequestedVBucketErr, 1)
-				return 0, fmt.Errorf("want close requested vbucketId: %d", currVBucketId)
+				return 0, fmt.Errorf("want close requested vbucketID: %d", currVBucketID)
 			}
 			if state == "running" {
-				currVBucketIds[currVBucketId] = "closing"
+				currVBucketIDs[currVBucketID] = "closing"
 				atomic.AddUint64(&d.stats.TotUPRCloseStream, 1)
 				sendCh <- &gomemcached.MCRequest{
 					Opcode:  gomemcached.UPR_CLOSESTREAM,
-					VBucket: currVBucketId,
-					Opaque:  uint32(currVBucketId),
+					VBucket: currVBucketID,
+					Opaque:  uint32(currVBucketID),
 				}
 			} // Else, state of "" or "closing", so no-op.
 		}
 	}
 
-	for wantVBucketId, _ := range wantVBucketIds {
-		state := currVBucketIds[wantVBucketId]
+	for wantVBucketID, _ := range wantVBucketIDs {
+		state := currVBucketIDs[wantVBucketID]
 		if state == "closing" {
 			// A UPR_CLOSESTREAM request is already on the wire, so
 			// error rather than have complex compensation logic.
 			atomic.AddUint64(&d.stats.TotWantClosingVBucketErr, 1)
-			return 0, fmt.Errorf("want closing vbucketId: %d", wantVBucketId)
+			return 0, fmt.Errorf("want closing vbucketID: %d", wantVBucketID)
 		}
 		if state == "" {
-			currVBucketIds[wantVBucketId] = "requested"
+			currVBucketIDs[wantVBucketID] = "requested"
 			atomic.AddUint64(&d.stats.TotUPRStreamReqWant, 1)
-			err := d.sendStreamReq(sendCh, wantVBucketId)
+			err := d.sendStreamReq(sendCh, wantVBucketID)
 			if err != nil {
 				return 0, err
 			}
@@ -905,7 +921,7 @@ func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
 }
 
 func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
-	currVBucketIds map[uint16]string, res *gomemcached.MCResponse) (
+	currVBucketIDs map[uint16]string, res *gomemcached.MCResponse) (
 	progress int, err error) {
 	switch res.Opcode {
 	case gomemcached.UPR_NOOP:
@@ -918,16 +934,16 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	case gomemcached.UPR_STREAMREQ:
 		atomic.AddUint64(&d.stats.TotUPRStreamReqRes, 1)
 
-		vbucketId := uint16(res.Opaque)
-		vbucketIdState := currVBucketIds[vbucketId]
+		vbucketID := uint16(res.Opaque)
+		vbucketIDState := currVBucketIDs[vbucketID]
 
-		delete(currVBucketIds, vbucketId)
+		delete(currVBucketIDs, vbucketID)
 
-		if vbucketIdState != "requested" {
+		if vbucketIDState != "requested" {
 			atomic.AddUint64(&d.stats.TotUPRStreamReqResStateErr, 1)
 			return 0, fmt.Errorf("streamreq non-requested,"+
-				" vbucketId: %d, vbucketIdState: %s, res: %#v",
-				vbucketId, vbucketIdState, res)
+				" vbucketID: %d, vbucketIDState: %s, res: %#v",
+				vbucketID, vbucketIDState, res)
 		}
 
 		if res.Status != gomemcached.SUCCESS {
@@ -941,15 +957,15 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 				}
 
 				rollbackSeq := binary.BigEndian.Uint64(res.Extras)
-				err := d.receiver.Rollback(vbucketId, rollbackSeq)
+				err := d.receiver.Rollback(vbucketID, rollbackSeq)
 				if err != nil {
 					atomic.AddUint64(&d.stats.TotUPRStreamReqResRollbackErr, 1)
 					return 0, err
 				}
 
-				currVBucketIds[vbucketId] = "requested"
+				currVBucketIDs[vbucketID] = "requested"
 				atomic.AddUint64(&d.stats.TotUPRStreamReqResWantAfterRollbackErr, 1)
-				err = d.sendStreamReq(sendCh, vbucketId)
+				err = d.sendStreamReq(sendCh, vbucketID)
 				if err != nil {
 					return 0, err
 				}
@@ -966,42 +982,42 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 				atomic.AddUint64(&d.stats.TotUPRStreamReqResFLogErr, 1)
 				return 0, err
 			}
-			v, _, err := d.getVBucketMetaData(vbucketId)
+			v, _, err := d.getVBucketMetaData(vbucketID)
 			if err != nil {
 				return 0, err
 			}
 
 			v.FailOverLog = flog
 
-			err = d.setVBucketMetaData(vbucketId, v)
+			err = d.setVBucketMetaData(vbucketID, v)
 			if err != nil {
 				return 0, err
 			}
 
-			currVBucketIds[vbucketId] = "running"
+			currVBucketIDs[vbucketID] = "running"
 			atomic.AddUint64(&d.stats.TotUPRStreamReqResSuccessOk, 1)
 		}
 
 	case gomemcached.UPR_STREAMEND:
 		atomic.AddUint64(&d.stats.TotUPRStreamEnd, 1)
 
-		vbucketId := uint16(res.Status)
-		vbucketIdState := currVBucketIds[vbucketId]
+		vbucketID := uint16(res.Status)
+		vbucketIDState := currVBucketIDs[vbucketID]
 
-		delete(currVBucketIds, vbucketId)
+		delete(currVBucketIDs, vbucketID)
 
-		if vbucketIdState != "running" &&
-			vbucketIdState != "closing" {
+		if vbucketIDState != "running" &&
+			vbucketIDState != "closing" {
 			atomic.AddUint64(&d.stats.TotUPRStreamEndStateErr, 1)
 			return 0, fmt.Errorf("stream-end bad state,"+
-				" vbucketId: %d, vbucketIdState: %s, res: %#v",
-				vbucketId, vbucketIdState, res)
+				" vbucketID: %d, vbucketIDState: %s, res: %#v",
+				vbucketID, vbucketIDState, res)
 		}
 
 		// We should not normally see a stream-end, unless we were
 		// trying to close.  Maybe the vbucket moved, though, so kick
 		// off a cluster refresh.
-		if vbucketIdState != "closing" {
+		if vbucketIDState != "closing" {
 			atomic.AddUint64(&d.stats.TotUPRStreamEndKick, 1)
 			d.Kick("stream-end")
 		}
@@ -1009,21 +1025,21 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	case gomemcached.UPR_CLOSESTREAM:
 		atomic.AddUint64(&d.stats.TotUPRCloseStreamRes, 1)
 
-		vbucketId := uint16(res.Opaque)
-		vbucketIdState := currVBucketIds[vbucketId]
+		vbucketID := uint16(res.Opaque)
+		vbucketIDState := currVBucketIDs[vbucketID]
 
-		if vbucketIdState != "closing" {
+		if vbucketIDState != "closing" {
 			atomic.AddUint64(&d.stats.TotUPRCloseStreamResStateErr, 1)
 			return 0, fmt.Errorf("close-stream bad state,"+
-				" vbucketId: %d, vbucketIdState: %s, res: %#v",
-				vbucketId, vbucketIdState, res)
+				" vbucketID: %d, vbucketIDState: %s, res: %#v",
+				vbucketID, vbucketIDState, res)
 		}
 
 		if res.Status != gomemcached.SUCCESS {
 			atomic.AddUint64(&d.stats.TotUPRCloseStreamResErr, 1)
 			return 0, fmt.Errorf("close-stream failed,"+
-				" vbucketId: %d, vbucketIdState: %s, res: %#v",
-				vbucketId, vbucketIdState, res)
+				" vbucketID: %d, vbucketIDState: %s, res: %#v",
+				vbucketID, vbucketIDState, res)
 		}
 
 		// At this point, we can ignore this success response to our
@@ -1034,21 +1050,21 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	case gomemcached.UPR_SNAPSHOT:
 		atomic.AddUint64(&d.stats.TotUPRSnapshot, 1)
 
-		vbucketId := uint16(res.Status)
-		vbucketIdState := currVBucketIds[vbucketId]
+		vbucketID := uint16(res.Status)
+		vbucketIDState := currVBucketIDs[vbucketID]
 
-		if vbucketIdState != "running" {
+		if vbucketIDState != "running" {
 			atomic.AddUint64(&d.stats.TotUPRSnapshotStateErr, 1)
 			return 0, fmt.Errorf("snapshot non-running,"+
-				" vbucketId: %d, vbucketIdState: %s, res: %#v",
-				vbucketId, vbucketIdState, res)
+				" vbucketID: %d, vbucketIDState: %s, res: %#v",
+				vbucketID, vbucketIDState, res)
 		}
 
 		if len(res.Extras) < 20 {
 			return 0, fmt.Errorf("bad snapshot extras, res: %#v", res)
 		}
 
-		v, _, err := d.getVBucketMetaData(vbucketId)
+		v, _, err := d.getVBucketMetaData(vbucketID)
 		if err != nil {
 			return 0, err
 		}
@@ -1056,7 +1072,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		v.SnapStart = binary.BigEndian.Uint64(res.Extras[0:8])
 		v.SnapEnd = binary.BigEndian.Uint64(res.Extras[8:16])
 
-		err = d.setVBucketMetaData(vbucketId, v)
+		err = d.setVBucketMetaData(vbucketID, v)
 		if err != nil {
 			return 0, err
 		}
@@ -1067,7 +1083,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		// true, as that's only used during takeovers.
 
 		atomic.AddUint64(&d.stats.TotUPRSnapshotStart, 1)
-		err = d.receiver.SnapshotStart(vbucketId,
+		err = d.receiver.SnapshotStart(vbucketID,
 			v.SnapStart, v.SnapEnd, snapType)
 		if err != nil {
 			atomic.AddUint64(&d.stats.TotUPRSnapshotStartErr, 1)
@@ -1115,11 +1131,11 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 	return 1, nil
 }
 
-func (d *bucketDataSource) getVBucketMetaData(vbucketId uint16) (
+func (d *bucketDataSource) getVBucketMetaData(vbucketID uint16) (
 	*VBucketMetaData, uint64, error) {
 	atomic.AddUint64(&d.stats.TotGetVBucketMetaData, 1)
 
-	buf, lastSeq, err := d.receiver.GetMetaData(vbucketId)
+	buf, lastSeq, err := d.receiver.GetMetaData(vbucketID)
 	if err != nil {
 		atomic.AddUint64(&d.stats.TotGetVBucketMetaDataErr, 1)
 		return nil, 0, err
@@ -1137,7 +1153,7 @@ func (d *bucketDataSource) getVBucketMetaData(vbucketId uint16) (
 	return vbucketMetaData, lastSeq, nil
 }
 
-func (d *bucketDataSource) setVBucketMetaData(vbucketId uint16,
+func (d *bucketDataSource) setVBucketMetaData(vbucketID uint16,
 	v *VBucketMetaData) error {
 	atomic.AddUint64(&d.stats.TotSetVBucketMetaData, 1)
 
@@ -1147,7 +1163,7 @@ func (d *bucketDataSource) setVBucketMetaData(vbucketId uint16,
 		return err
 	}
 
-	err = d.receiver.SetMetaData(vbucketId, buf)
+	err = d.receiver.SetMetaData(vbucketID, buf)
 	if err != nil {
 		atomic.AddUint64(&d.stats.TotSetVBucketMetaDataErr, 1)
 		return err
@@ -1158,8 +1174,8 @@ func (d *bucketDataSource) setVBucketMetaData(vbucketId uint16,
 }
 
 func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
-	vbucketId uint16) error {
-	vbucketMetaData, lastSeq, err := d.getVBucketMetaData(vbucketId)
+	vbucketID uint16) error {
+	vbucketMetaData, lastSeq, err := d.getVBucketMetaData(vbucketID)
 	if err != nil {
 		return fmt.Errorf("sendStreamReq, err: %v", err)
 	}
@@ -1173,7 +1189,7 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 
 	seqEnd := uint64(0xffffffffffffffff)
 	if d.options.SeqEnd != nil { // Allow apps like backup to control the seqEnd.
-		if s, exists := d.options.SeqEnd[vbucketId]; exists {
+		if s, exists := d.options.SeqEnd[vbucketID]; exists {
 			seqEnd = s
 		}
 	}
@@ -1182,8 +1198,8 @@ func (d *bucketDataSource) sendStreamReq(sendCh chan *gomemcached.MCRequest,
 
 	req := &gomemcached.MCRequest{
 		Opcode:  gomemcached.UPR_STREAMREQ,
-		VBucket: vbucketId,
-		Opaque:  uint32(vbucketId),
+		VBucket: vbucketID,
+		Opaque:  uint32(vbucketID),
 		Extras:  make([]byte, 48),
 	}
 	binary.BigEndian.PutUint32(req.Extras[:4], flags)
@@ -1256,6 +1272,11 @@ func (bw *bucketWrapper) VBServerMap() *couchbase.VBucketServerMap {
 	return bw.b.VBServerMap()
 }
 
+// ConnectBucket is the default function used by BucketDataSource
+// to connect to a Couchbase cluster to retrieve Bucket information.
+// It is exposed for testability and to allow applications to
+// override or wrap via BucketDataSourceOptions.
+//
 // TODO: Use AUTH'ed approach.
 func ConnectBucket(serverURL, poolName, bucketName string,
 	authFunc AuthFunc) (Bucket, error) {
@@ -1270,6 +1291,8 @@ func ConnectBucket(serverURL, poolName, bucketName string,
 	return &bucketWrapper{b: bucket}, nil
 }
 
+// UPROpen starts a UPR_OPEN stream on a memcached client connection.
+// It is exposed for testability.
 func UPROpen(mc *memcached.Client, name string, bufSize uint32) error {
 	rq := &gomemcached.MCRequest{
 		Opcode: gomemcached.UPR_OPEN,
@@ -1310,6 +1333,8 @@ func UPROpen(mc *memcached.Client, name string, bufSize uint32) error {
 	return nil
 }
 
+// ParseFailOverLog parses a byte array to an array of [vbucketUUID,
+// seqNum] pairs.  It is exposed for testability.
 func ParseFailOverLog(body []byte) ([][]uint64, error) {
 	if len(body)%16 != 0 {
 		return nil, fmt.Errorf("invalid body length %v, in failover-log", len(body))
@@ -1326,10 +1351,11 @@ func ParseFailOverLog(body []byte) ([][]uint64, error) {
 
 // --------------------------------------------------------------
 
-// Copies metrics from s to r, and also applies an optional function
-// (fn).  The fn is invoked with metrics from s and r, and can be used
-// to compute additions, subtractions, negations, etc.  The default
-// when fn is nil just uses the metrics from s.
+// AtomicCopyTo copies metrics from s to r (or, from source to
+// result), and also applies an optional fn function.  The fn is
+// invoked with metrics from s and r, and can be used to compute
+// additions, subtractions, negations, etc.  When fn is nil,
+// AtomicCopyTo behaves as a straight copier.
 func (s *BucketDataSourceStats) AtomicCopyTo(r *BucketDataSourceStats,
 	fn func(sv uint64, rv uint64) uint64) {
 	// Using reflection rather than a whole slew of explicit

@@ -937,9 +937,9 @@ func TestUPROpenStreamReq(t *testing.T) {
 	binary.BigEndian.PutUint64(req.Extras, 102034)
 
 	hb := req.HeaderBytes()
-	bb := make([]byte, len(hb) - 24 + len(res.Body))
+	bb := make([]byte, len(hb)-24+len(res.Body))
 	copy(bb, hb[24:])
-	copy(bb[len(hb) - 24:], res.Body)
+	copy(bb[len(hb)-24:], res.Body)
 
 	reqR = <-rwc.readCh
 	copy(reqR.buf, hb[:24])
@@ -967,9 +967,9 @@ func TestUPROpenStreamReq(t *testing.T) {
 	binary.BigEndian.PutUint64(req.Extras, 102035)
 
 	hb = req.HeaderBytes()
-	bb = make([]byte, len(hb) - 24 + len(res.Body))
+	bb = make([]byte, len(hb)-24+len(res.Body))
 	copy(bb, hb[24:])
-	copy(bb[len(hb) - 24:], res.Body)
+	copy(bb[len(hb)-24:], res.Body)
 
 	reqR = <-rwc.readCh
 	copy(reqR.buf, hb[:24])
@@ -997,9 +997,9 @@ func TestUPROpenStreamReq(t *testing.T) {
 	binary.BigEndian.PutUint64(req.Extras, 102036)
 
 	hb = req.HeaderBytes()
-	bb = make([]byte, len(hb) - 24 + len(res.Body))
+	bb = make([]byte, len(hb)-24+len(res.Body))
 	copy(bb, hb[24:])
-	copy(bb[len(hb) - 24:], res.Body)
+	copy(bb[len(hb)-24:], res.Body)
 
 	reqR = <-rwc.readCh
 	copy(reqR.buf, hb[:24])
