@@ -33,7 +33,7 @@ type TestBucket struct {
 }
 
 func (bw *TestBucket) Close() {
-	bw.numClose += 1
+	bw.numClose++
 }
 
 func (bw *TestBucket) GetUUID() string {
@@ -103,7 +103,7 @@ func (r *TestReceiver) DataDelete(vbucketId uint16, key []byte, seq uint64,
 
 func (r *TestReceiver) SnapshotStart(vbucketId uint16,
 	snapStart, snapEnd uint64, snapType uint32) error {
-	r.numSnapshotStarts += 1
+	r.numSnapshotStarts++
 	return nil
 }
 
@@ -111,7 +111,7 @@ func (r *TestReceiver) SetMetaData(vbucketId uint16, value []byte) error {
 	r.m.Lock()
 	defer r.m.Unlock()
 
-	r.numSetMetaDatas += 1
+	r.numSetMetaDatas++
 	if r.meta == nil {
 		r.meta = make(map[uint16][]byte)
 	}
@@ -123,7 +123,7 @@ func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint
 	r.m.Lock()
 	defer r.m.Unlock()
 
-	r.numGetMetaDatas += 1
+	r.numGetMetaDatas++
 	rv := []byte(nil)
 	if r.meta != nil {
 		rv = r.meta[vbucketId]
@@ -137,7 +137,7 @@ func (r *TestReceiver) GetMetaData(vbucketId uint16) (value []byte, lastSeq uint
 }
 
 func (r *TestReceiver) Rollback(vbucketId uint16, rollbackSeq uint64) error {
-	r.numRollbacks += 1
+	r.numRollbacks++
 	return fmt.Errorf("bad-rollback")
 }
 
@@ -151,7 +151,7 @@ type TestRWC struct {
 }
 
 func (c *TestRWC) Read(p []byte) (n int, err error) {
-	c.numReads += 1
+	c.numReads++
 	if c.readCh != nil {
 		resCh := make(chan RWRes)
 		c.readCh <- RWReq{op: "read", buf: p, resCh: resCh}
@@ -162,7 +162,7 @@ func (c *TestRWC) Read(p []byte) (n int, err error) {
 }
 
 func (c *TestRWC) Write(p []byte) (n int, err error) {
-	c.numWrites += 1
+	c.numWrites++
 	if c.writeCh != nil {
 		resCh := make(chan RWRes)
 		c.writeCh <- RWReq{op: "write", buf: p, resCh: resCh}
@@ -192,7 +192,7 @@ type RWRes struct {
 func TestExponentialBackoffLoop(t *testing.T) {
 	called := 0
 	ExponentialBackoffLoop("test", func() int {
-		called += 1
+		called++
 		return -1
 	}, 0, 0, 0)
 	if called != 1 {
@@ -201,7 +201,7 @@ func TestExponentialBackoffLoop(t *testing.T) {
 
 	called = 0
 	ExponentialBackoffLoop("test", func() int {
-		called += 1
+		called++
 		if called <= 1 {
 			return 1
 		}
@@ -213,7 +213,7 @@ func TestExponentialBackoffLoop(t *testing.T) {
 
 	called = 0
 	ExponentialBackoffLoop("test", func() int {
-		called += 1
+		called++
 		if called == 1 {
 			return 1
 		}
@@ -228,7 +228,7 @@ func TestExponentialBackoffLoop(t *testing.T) {
 
 	called = 0
 	ExponentialBackoffLoop("test", func() int {
-		called += 1
+		called++
 		if called == 1 {
 			return 1
 		}
