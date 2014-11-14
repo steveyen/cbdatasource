@@ -173,6 +173,17 @@ func (e *AllServerURLsConnectBucketError) Error() string {
 	return fmt.Sprintf("could not connect to any serverURL: %#v", e.ServerURLs)
 }
 
+// AuthFailError is the error type passed to Receiver.OnError() when there
+// is an auth request error to the Couchbase cluster or server node.
+type AuthFailError struct {
+	ServerURL string
+	User      string
+}
+
+func (e *AuthFailError) Error() string {
+	return fmt.Sprintf("auth fail, serverURL: %#v, user: %s", e.ServerURL, e.User)
+}
+
 // A Bucket interface defines the set of methods that cbdatasource
 // needs from an abstract couchbase.Bucket.  This separate interface
 // allows for easier testability.
@@ -701,16 +712,13 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			res, err := client.Auth(user, pswd)
 			if err != nil {
 				atomic.AddUint64(&d.stats.TotWorkerAuthErr, 1)
-				// TODO: Provide auth error subtype so application can react better.
 				d.receiver.OnError(fmt.Errorf("worker auth, server: %s, user: %s, err: %v",
 					server, user, err))
 				return 0
 			}
 			if res.Status != gomemcached.SUCCESS {
 				atomic.AddUint64(&d.stats.TotWorkerAuthFail, 1)
-				// TODO: Provide auth error subtype so application can react better.
-				d.receiver.OnError(fmt.Errorf("worker auth failed, server: %s, user: %s",
-					server, user))
+				d.receiver.OnError(&AuthFailError{ServerURL: server, User: user})
 				return 0
 			}
 			atomic.AddUint64(&d.stats.TotWorkerAuthOk, 1)
