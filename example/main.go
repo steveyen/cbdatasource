@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/couchbase/gomemcached"
+	"github.com/couchbaselabs/go-couchbase"
 	"github.com/steveyen/cbdatasource"
 )
 
@@ -46,6 +47,10 @@ var bucketUUID = flag.String("bucketUUID", "",
 	"bucket UUID")
 var vbucketIds = flag.String("vbucketIds", "",
 	"comma separated vbucket id numbers; defaults to all vbucket id's")
+var authUser = flag.String("authUser", "",
+	"auth user name (probably same as bucketName)")
+var authPswd = flag.String("authPswd", "",
+	"auth password")
 
 var optionClusterManagerBackoffFactor =
 	flag.Float64("optionClusterManagerBackoffFactor", 1.5,
@@ -123,15 +128,17 @@ func main() {
 		FeedBufferAckThreshold: float32(*optionFeedBufferAckThreshold),
 	}
 
-	var authFunc cbdatasource.AuthFunc = nil
+	var auth couchbase.AuthHandler = nil
+	if *authUser != "" {
+		auth = &authUserPswd{}
+	}
 
 	receiver := &ExampleReceiver{}
 
 	var err error
 
 	bds, err = cbdatasource.NewBucketDataSource(serverURLs,
-		*poolName, *bucketName, *bucketUUID,
-		vbucketIdsArr, authFunc, receiver, options)
+		*poolName, *bucketName, *bucketUUID, vbucketIdsArr, auth, receiver, options)
 	if err != nil {
 		log.Fatalf(fmt.Sprintf("error: NewBucketDataSource, err: %v", err))
 	}
@@ -148,6 +155,12 @@ func main() {
 		time.Sleep(1000 * time.Millisecond)
 		reportStats(bds, false)
 	}
+}
+
+type authUserPswd struct{}
+
+func (a authUserPswd) GetCredentials() (string, string) {
+	return *authUser, *authPswd
 }
 
 // ----------------------------------------------------------------
