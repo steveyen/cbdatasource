@@ -151,7 +151,7 @@ type BucketDataSourceOptions struct {
 	// Optional function to connect to a couchbase cluster manager bucket.
 	// Defaults to ConnectBucket() function in this package.
 	ConnectBucket func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error)
+		auth couchbase.AuthHandler) (Bucket, error)
 
 	// Optional function to connect to a couchbase data manager node.
 	// Defaults to memcached.Connect().
@@ -238,6 +238,10 @@ type BucketDataSourceStats struct {
 	TotWorkerConnect    uint64
 	TotWorkerConnectErr uint64
 	TotWorkerConnectOk  uint64
+	TotWorkerAuth       uint64
+	TotWorkerAuthErr    uint64
+	TotWorkerAuthFail   uint64
+	TotWorkerAuthOk     uint64
 	TotWorkerUPROpenErr uint64
 	TotWorkerUPROpenOk  uint64
 
@@ -314,11 +318,6 @@ type BucketDataSourceStats struct {
 	TotSetVBucketMetaDataOk         uint64
 }
 
-// AuthFunc is the optional callback the application may provide when
-// the BucketDataSource needs to connect or reconnect to a Couchbase
-// cluster.
-type AuthFunc func(kind string, challenge []byte) (response []byte, err error)
-
 // --------------------------------------------------------
 
 // VBucketMetaData is an internal struct is exposed to enable json
@@ -337,7 +336,7 @@ type bucketDataSource struct {
 	bucketName string
 	bucketUUID string
 	vbucketIDs []uint16
-	authFunc   AuthFunc
+	auth       couchbase.AuthHandler
 	receiver   Receiver
 	options    *BucketDataSourceOptions
 
@@ -365,15 +364,20 @@ type bucketDataSource struct {
 // validation.  An optional array of vbucketID numbers allows the
 // application to specify which vbuckets to retrieve; and the
 // vbucketIDs array can be nil which means all vbuckets are retrieved
-// by the BucketDataSource.  The application must supply its own
-// implementation of the Receiver interface (see the example program
-// as a sample).  The optional options parameter (which may be nil)
-// allows the application to specify advanced parameters like backoff
-// and retry-sleep values.
-func NewBucketDataSource(serverURLs []string,
-	poolName, bucketName, bucketUUID string,
-	vbucketIDs []uint16, authFunc AuthFunc,
-	receiver Receiver, options *BucketDataSourceOptions) (BucketDataSource, error) {
+// by the BucketDataSource.  The optional auth parameter can be nil.
+// The application must supply its own implementation of the Receiver
+// interface (see the example program as a sample).  The optional
+// options parameter (which may be nil) allows the application to
+// specify advanced parameters like backoff and retry-sleep values.
+func NewBucketDataSource(
+	serverURLs []string,
+	poolName string,
+	bucketName string,
+	bucketUUID string,
+	vbucketIDs []uint16,
+	auth couchbase.AuthHandler,
+	receiver Receiver,
+	options *BucketDataSourceOptions) (BucketDataSource, error) {
 	if len(serverURLs) < 1 {
 		return nil, fmt.Errorf("missing at least 1 serverURL")
 	}
@@ -395,7 +399,7 @@ func NewBucketDataSource(serverURLs []string,
 		bucketName: bucketName,
 		bucketUUID: bucketUUID,
 		vbucketIDs: vbucketIDs,
-		authFunc:   authFunc,
+		auth:       auth,
 		receiver:   receiver,
 		options:    options,
 
@@ -466,7 +470,7 @@ func (d *bucketDataSource) refreshCluster() int {
 			connectBucket = ConnectBucket
 		}
 
-		bucket, err := connectBucket(serverURL, d.poolName, d.bucketName, d.authFunc)
+		bucket, err := connectBucket(serverURL, d.poolName, d.bucketName, d.auth)
 		if err != nil {
 			atomic.AddUint64(&d.stats.TotRefreshClusterConnectBucketErr, 1)
 			d.receiver.OnError(err)
@@ -690,7 +694,28 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	defer client.Close()
 	atomic.AddUint64(&d.stats.TotWorkerConnectOk, 1)
 
-	// TODO: Call client.Auth(user, pswd).
+	if d.auth != nil {
+		user, pswd := d.auth.GetCredentials()
+		if user != "" {
+			atomic.AddUint64(&d.stats.TotWorkerAuth, 1)
+			res, err := client.Auth(user, pswd)
+			if err != nil {
+				atomic.AddUint64(&d.stats.TotWorkerAuthErr, 1)
+				// TODO: Provide auth error subtype so application can react better.
+				d.receiver.OnError(fmt.Errorf("worker auth, server: %s, user: %s, err: %v",
+					server, user, err))
+				return 0
+			}
+			if res.Status != gomemcached.SUCCESS {
+				atomic.AddUint64(&d.stats.TotWorkerAuthFail, 1)
+				// TODO: Provide auth error subtype so application can react better.
+				d.receiver.OnError(fmt.Errorf("worker auth failed, server: %s, user: %s",
+					server, user))
+				return 0
+			}
+			atomic.AddUint64(&d.stats.TotWorkerAuthOk, 1)
+		}
+	}
 
 	uprOpenName := d.options.Name
 	if uprOpenName == "" {
@@ -1280,11 +1305,26 @@ func (bw *bucketWrapper) VBServerMap() *couchbase.VBucketServerMap {
 // to connect to a Couchbase cluster to retrieve Bucket information.
 // It is exposed for testability and to allow applications to
 // override or wrap via BucketDataSourceOptions.
-//
-// TODO: Use AUTH'ed approach.
 func ConnectBucket(serverURL, poolName, bucketName string,
-	authFunc AuthFunc) (Bucket, error) {
-	bucket, err := couchbase.GetBucket(serverURL, poolName, bucketName)
+	auth couchbase.AuthHandler) (Bucket, error) {
+	var bucket *couchbase.Bucket
+	var err error
+
+	if auth != nil {
+		client, err := couchbase.ConnectWithAuth(serverURL, auth)
+		if err != nil {
+			return nil, err
+		}
+
+		pool, err := client.GetPool(poolName)
+		if err != nil {
+			return nil, err
+		}
+
+		bucket, err = pool.GetBucket(bucketName)
+	} else {
+		bucket, err = couchbase.GetBucket(serverURL, poolName, bucketName)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1292,6 +1332,7 @@ func ConnectBucket(serverURL, poolName, bucketName string,
 		return nil, fmt.Errorf("unknown bucket,"+
 			" serverURL: %s, bucketName: %s", serverURL, bucketName)
 	}
+
 	return &bucketWrapper{b: bucket}, nil
 }
 

@@ -255,12 +255,12 @@ func TestNewBucketDataSource(t *testing.T) {
 	serverURLs := []string(nil)
 	bucketUUID := ""
 	vbucketIDs := []uint16(nil)
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	var receiver Receiver
 	var options *BucketDataSourceOptions
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
@@ -269,28 +269,28 @@ func TestNewBucketDataSource(t *testing.T) {
 	bucketUUID = ""
 	vbucketIDs = []uint16(nil)
 	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
 
 	poolName := ""
 	bds, err = NewBucketDataSource(serverURLs, poolName, "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
 
 	bucketName := ""
 	bds, err = NewBucketDataSource(serverURLs, "poolName", bucketName, bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err == nil || bds != nil {
 		t.Errorf("expected err")
 	}
 
 	receiver = &TestReceiver{testName: "TestNewBucketDataSource"}
 	bds, err = NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err")
 	}
@@ -320,7 +320,7 @@ func TestBucketDataSourceStatsAtomicCopyTo(t *testing.T) {
 
 func TestImmediateStartClose(t *testing.T) {
 	connectBucket := func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error) {
+		auth couchbase.AuthHandler) (Bucket, error) {
 		return nil, fmt.Errorf("fake connectBucket err")
 	}
 
@@ -334,7 +334,7 @@ func TestImmediateStartClose(t *testing.T) {
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
 	vbucketIDs := []uint16(nil)
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
@@ -342,7 +342,7 @@ func TestImmediateStartClose(t *testing.T) {
 	}
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestErrOnConnectBucket(t *testing.T) {
 	theErr := fmt.Errorf("fake connectBucket err")
 
 	connectBucket := func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error) {
+		auth couchbase.AuthHandler) (Bucket, error) {
 		return nil, theErr
 	}
 
@@ -426,7 +426,7 @@ func TestErrOnConnectBucket(t *testing.T) {
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
 	vbucketIDs := []uint16(nil)
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
@@ -434,7 +434,7 @@ func TestErrOnConnectBucket(t *testing.T) {
 	}
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestErrOnConnectBucket(t *testing.T) {
 
 func TestWrongBucketUUID(t *testing.T) {
 	connectBucket := func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error) {
+		auth couchbase.AuthHandler) (Bucket, error) {
 		return &TestBucket{vbsm: &couchbase.VBucketServerMap{}}, nil
 	}
 
@@ -475,7 +475,7 @@ func TestWrongBucketUUID(t *testing.T) {
 	serverURLs := []string{"serverA"}
 	bucketUUID := "not-a-good-uuid"
 	vbucketIDs := []uint16(nil)
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	receiver := &TestReceiver{testName: "TestImmediateStartClose"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
@@ -483,7 +483,7 @@ func TestWrongBucketUUID(t *testing.T) {
 	}
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	var connectCh chan []string
 
 	connectBucket := func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error) {
+		auth couchbase.AuthHandler) (Bucket, error) {
 		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
@@ -528,7 +528,7 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
 	vbucketIDs := []uint16(nil)
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	receiver := &TestReceiver{testName: "TestNewBucketDataSource"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
@@ -543,7 +543,7 @@ func TestBucketDataSourceStartNilVBSM(t *testing.T) {
 	connectBucketCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -576,7 +576,7 @@ func TestConnectError(t *testing.T) {
 	var connectCh chan []string
 
 	connectBucket := func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error) {
+		auth couchbase.AuthHandler) (Bucket, error) {
 		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
@@ -593,7 +593,7 @@ func TestConnectError(t *testing.T) {
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
 	vbucketIDs := []uint16{0, 1, 2, 3}
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
@@ -617,7 +617,7 @@ func TestConnectError(t *testing.T) {
 	connectCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -664,7 +664,7 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	var connectCh chan []string
 
 	connectBucket := func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error) {
+		auth couchbase.AuthHandler) (Bucket, error) {
 		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
@@ -680,7 +680,7 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
 	vbucketIDs := []uint16{0, 1, 2, 3}
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
@@ -704,7 +704,7 @@ func TestConnThatAlwaysErrors(t *testing.T) {
 	connectCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 	var connectCh chan []string
 
 	connectBucket := func(serverURL, poolName, bucketName string,
-		authFunc AuthFunc) (Bucket, error) {
+		auth couchbase.AuthHandler) (Bucket, error) {
 		connectBucketCh <- []string{serverURL, poolName, bucketName}
 		return connectBucketResult, connectBucketErr
 	}
@@ -791,7 +791,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 	serverURLs := []string{"serverA"}
 	bucketUUID := ""
 	vbucketIDs := []uint16{2}
-	var authFunc AuthFunc
+	var auth couchbase.AuthHandler
 	receiver := &TestReceiver{testName: "TestBucketDataSourceStartVBSM"}
 	options := &BucketDataSourceOptions{
 		ConnectBucket: connectBucket,
@@ -815,7 +815,7 @@ func TestUPROpenStreamReq(t *testing.T) {
 	connectCh = make(chan []string)
 
 	bds, err := NewBucketDataSource(serverURLs, "poolName", "bucketName", bucketUUID,
-		vbucketIDs, authFunc, receiver, options)
+		vbucketIDs, auth, receiver, options)
 	if err != nil || bds == nil {
 		t.Errorf("expected no err, got err: %v", err)
 	}
