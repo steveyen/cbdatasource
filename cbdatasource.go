@@ -294,6 +294,9 @@ type BucketDataSourceStats struct {
 	TotUPRStreamReqRes                     uint64
 	TotUPRStreamReqResStateErr             uint64
 	TotUPRStreamReqResFail                 uint64
+	TotUPRStreamReqResFailNotMyVBucket     uint64
+	TotUPRStreamReqResFailERange           uint64
+	TotUPRStreamReqResFailENoMem           uint64
 	TotUPRStreamReqResRollback             uint64
 	TotUPRStreamReqResRollbackErr          uint64
 	TotUPRStreamReqResWantAfterRollbackErr uint64
@@ -987,6 +990,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		if res.Status != gomemcached.SUCCESS {
 			atomic.AddUint64(&d.stats.TotUPRStreamReqResFail, 1)
+			fmt.Printf("TotUPRStreamReqResFail, res: %#v, res.Body: %s", res, res.Body)
 
 			if res.Status == gomemcached.ROLLBACK {
 				atomic.AddUint64(&d.stats.TotUPRStreamReqResRollback, 1)
@@ -1009,6 +1013,14 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 					return 0, err
 				}
 			} else {
+				if res.Status == gomemcached.NOT_MY_VBUCKET {
+					atomic.AddUint64(&d.stats.TotUPRStreamReqResFailNotMyVBucket, 1)
+				} else if res.Status == gomemcached.ERANGE {
+					atomic.AddUint64(&d.stats.TotUPRStreamReqResFailERange, 1)
+				} else if res.Status == gomemcached.ENOMEM {
+					atomic.AddUint64(&d.stats.TotUPRStreamReqResFailENoMem, 1)
+				}
+
 				// Maybe the vbucket moved, so kick off a cluster refresh.
 				atomic.AddUint64(&d.stats.TotUPRStreamReqResKick, 1)
 				d.Kick("stream-req-error")
