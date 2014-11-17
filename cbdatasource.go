@@ -298,6 +298,7 @@ type BucketDataSourceStats struct {
 	TotUPRStreamReqResFailERange           uint64
 	TotUPRStreamReqResFailENoMem           uint64
 	TotUPRStreamReqResRollback             uint64
+	TotUPRStreamReqResRollbackStart        uint64
 	TotUPRStreamReqResRollbackErr          uint64
 	TotUPRStreamReqResWantAfterRollbackErr uint64
 	TotUPRStreamReqResKick                 uint64
@@ -990,16 +991,26 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		if res.Status != gomemcached.SUCCESS {
 			atomic.AddUint64(&d.stats.TotUPRStreamReqResFail, 1)
-			fmt.Printf("TotUPRStreamReqResFail, res: %#v, res.Body: %s", res, res.Body)
 
-			if res.Status == gomemcached.ROLLBACK {
-				atomic.AddUint64(&d.stats.TotUPRStreamReqResRollback, 1)
+			if res.Status == gomemcached.ROLLBACK ||
+				res.Status == gomemcached.ERANGE {
+				rollbackSeq := uint64(0)
 
-				if len(res.Extras) != 8 {
-					return 0, fmt.Errorf("bad rollback extras: %#v", res)
+				if res.Status == gomemcached.ROLLBACK {
+					atomic.AddUint64(&d.stats.TotUPRStreamReqResRollback, 1)
+
+					if len(res.Extras) != 8 {
+						return 0, fmt.Errorf("bad rollback extras: %#v", res)
+					}
+
+					rollbackSeq = binary.BigEndian.Uint64(res.Extras)
+				} else {
+					// NOTE: Not sure what else to do here on ERANGE
+					// error response besides rollback to zero.
+					atomic.AddUint64(&d.stats.TotUPRStreamReqResFailERange, 1)
 				}
 
-				rollbackSeq := binary.BigEndian.Uint64(res.Extras)
+				atomic.AddUint64(&d.stats.TotUPRStreamReqResRollbackStart, 1)
 				err := d.receiver.Rollback(vbucketID, rollbackSeq)
 				if err != nil {
 					atomic.AddUint64(&d.stats.TotUPRStreamReqResRollbackErr, 1)
@@ -1015,8 +1026,6 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			} else {
 				if res.Status == gomemcached.NOT_MY_VBUCKET {
 					atomic.AddUint64(&d.stats.TotUPRStreamReqResFailNotMyVBucket, 1)
-				} else if res.Status == gomemcached.ERANGE {
-					atomic.AddUint64(&d.stats.TotUPRStreamReqResFailERange, 1)
 				} else if res.Status == gomemcached.ENOMEM {
 					atomic.AddUint64(&d.stats.TotUPRStreamReqResFailENoMem, 1)
 				}
