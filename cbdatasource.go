@@ -216,19 +216,20 @@ type BucketDataSourceStats struct {
 	TotKick   uint64
 	TotKickOk uint64
 
-	TotRefreshCluster                 uint64
-	TotRefreshClusterConnectBucket    uint64
-	TotRefreshClusterConnectBucketErr uint64
-	TotRefreshClusterConnectBucketOk  uint64
-	TotRefreshClusterBucketUUIDErr    uint64
-	TotRefreshClusterVBMNilErr        uint64
-	TotRefreshClusterKickWorkers      uint64
-	TotRefreshClusterKickWorkersOk    uint64
-	TotRefreshClusterAwokenClosed     uint64
-	TotRefreshClusterAwokenStopped    uint64
-	TotRefreshClusterAwokenRestart    uint64
-	TotRefreshClusterAwoken           uint64
-	TotRefreshClusterDone             uint64
+	TotRefreshCluster                              uint64
+	TotRefreshClusterConnectBucket                 uint64
+	TotRefreshClusterConnectBucketErr              uint64
+	TotRefreshClusterConnectBucketOk               uint64
+	TotRefreshClusterBucketUUIDErr                 uint64
+	TotRefreshClusterVBMNilErr                     uint64
+	TotRefreshClusterKickWorkers                   uint64
+	TotRefreshClusterKickWorkersOk                 uint64
+	TotRefreshClusterAwokenClosed                  uint64
+	TotRefreshClusterAwokenStopped                 uint64
+	TotRefreshClusterAwokenRestart                 uint64
+	TotRefreshClusterAwoken                        uint64
+	TotRefreshClusterAllServerURLsConnectBucketErr uint64
+	TotRefreshClusterDone                          uint64
 
 	TotRefreshWorkers                uint64
 	TotRefreshWorkersVBMNilErr       uint64
@@ -544,6 +545,7 @@ func (d *bucketDataSource) refreshCluster() int {
 	// Notify Receiver in case it wants to Close() down this
 	// BucketDataSource after enough attempts.  The typed interfaces
 	// allow Receiver to have better error handling logic.
+	atomic.AddUint64(&d.stats.TotRefreshClusterAllServerURLsConnectBucketErr, 1)
 	d.receiver.OnError(&AllServerURLsConnectBucketError{ServerURLs: d.serverURLs})
 
 	return 0 // Ran through all the serverURLs, so no progress.
