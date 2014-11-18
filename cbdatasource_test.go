@@ -860,6 +860,21 @@ func TestUPROpenStreamReq(t *testing.T) {
 	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
 
 	// ------------------------------------------------------------
+	receiver.m.Lock()
+	if len(receiver.errs) != 0 {
+		t.Errorf("expected 0 errs, got: %v", receiver.errs)
+	}
+	if receiver.numSetMetaDatas != 0 {
+		t.Errorf("expected 0 numSetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.numGetMetaDatas != 1 {
+		t.Errorf("expected 0 numGetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.meta[2] != nil {
+		t.Errorf("expected nil meta for vbucket 2")
+	}
+	receiver.m.Unlock()
+
 	reqW = <-rwc.writeCh
 	req = &gomemcached.MCRequest{}
 	n, err = req.Receive(bytes.NewReader(reqW.buf), nil)
@@ -894,8 +909,8 @@ func TestUPROpenStreamReq(t *testing.T) {
 		Opaque: req.Opaque,
 		Body:   make([]byte, 16),
 	}
-	binary.BigEndian.PutUint64(res.Body[:8], 102030)
-	binary.BigEndian.PutUint64(res.Body[8:16], 302010)
+	binary.BigEndian.PutUint64(res.Body[:8], 102030)   // VB-UUID
+	binary.BigEndian.PutUint64(res.Body[8:16], 302010) // VB-SEQ
 	reqR = <-rwc.readCh
 	copy(reqR.buf, res.HeaderBytes())
 	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
@@ -917,16 +932,28 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if len(receiver.muts) != 0 {
 		t.Errorf("expected 0 muts")
 	}
+	if len(receiver.errs) != 0 {
+		t.Errorf("expected 0 errs, got: %v", receiver.errs)
+	}
+	if receiver.numSetMetaDatas != 1 {
+		t.Errorf("expected 1 numSetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.numGetMetaDatas != 2 {
+		t.Errorf("expected 2 numGetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.meta[2] == nil {
+		t.Errorf("expected meta for vbucket 2")
+	}
 	receiver.m.Unlock()
 
 	req = &gomemcached.MCRequest{
-		Opcode:  gomemcached.UPR_MUTATION,
+		Opcode:  gomemcached.UPR_SNAPSHOT,
 		VBucket: 2,
-		Extras:  make([]byte, 8),
-		Key:     []byte("hello"),
-		Body:    []byte("world"),
+		Extras:  make([]byte, 20),
 	}
-	binary.BigEndian.PutUint64(req.Extras, 102034)
+	binary.BigEndian.PutUint64(req.Extras[0:8], 102034)  // snapshot-start
+	binary.BigEndian.PutUint64(req.Extras[8:16], 103000) // snapshot-end
+	binary.BigEndian.PutUint32(req.Extras[16:20], 0)     // snapshot-type
 
 	hb := req.HeaderBytes()
 	bb := make([]byte, len(hb)-24+len(res.Body))
@@ -943,9 +970,64 @@ func TestUPROpenStreamReq(t *testing.T) {
 
 	runtime.Gosched()
 
+	// ------------------------------------------------------------
+	receiver.m.Lock()
+	if len(receiver.muts) != 0 {
+		t.Errorf("expected 0 muts")
+	}
+	if len(receiver.errs) != 0 {
+		t.Errorf("expected 0 errs, got: %v", receiver.errs)
+	}
+	if receiver.numSetMetaDatas != 1 {
+		t.Errorf("expected 1 numSetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.numGetMetaDatas != 2 {
+		t.Errorf("expected 2 numGetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.meta[2] == nil {
+		t.Errorf("expected meta for vbucket 2")
+	}
+	receiver.m.Unlock()
+
+	req = &gomemcached.MCRequest{
+		Opcode:  gomemcached.UPR_MUTATION,
+		VBucket: 2,
+		Extras:  make([]byte, 8),
+		Key:     []byte("hello"),
+		Body:    []byte("world"),
+	}
+	binary.BigEndian.PutUint64(req.Extras, 102034)
+
+	hb = req.HeaderBytes()
+	bb = make([]byte, len(hb)-24+len(res.Body))
+	copy(bb, hb[24:])
+	copy(bb[len(hb)-24:], res.Body)
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, hb[:24])
+	reqR.resCh <- RWRes{n: len(hb), err: nil}
+
+	reqR = <-rwc.readCh
+	copy(reqR.buf, bb)
+	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
+
+	runtime.Gosched()
+
 	receiver.m.Lock()
 	if len(receiver.muts) != 1 {
 		t.Errorf("expected 1 muts")
+	}
+	if len(receiver.errs) != 0 {
+		t.Errorf("expected 0 errs, got: %v", receiver.errs)
+	}
+	if receiver.numSetMetaDatas != 2 {
+		t.Errorf("expected 1 numSetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.numGetMetaDatas != 3 {
+		t.Errorf("expected 2 numGetMetaDatas, got: %#v", receiver)
+	}
+	if receiver.meta[2] == nil {
+		t.Errorf("expected meta for vbucket 2")
 	}
 	receiver.m.Unlock()
 
@@ -1019,11 +1101,11 @@ func TestUPROpenStreamReq(t *testing.T) {
 	if len(receiver.errs) != 0 {
 		t.Errorf("expected 0 errs, got: %v", receiver.errs)
 	}
-	if receiver.numSetMetaDatas != 1 {
-		t.Errorf("expected 1 numSetMetaDatas, got: %#v", receiver)
+	if receiver.numSetMetaDatas != 2 {
+		t.Errorf("expected 2 numSetMetaDatas, got: %#v", receiver)
 	}
-	if receiver.numGetMetaDatas != 2 {
-		t.Errorf("expected 2 numGetMetaDatas, got: %#v", receiver)
+	if receiver.numGetMetaDatas != 3 {
+		t.Errorf("expected 3 numGetMetaDatas, got: %#v", receiver)
 	}
 	if receiver.meta[2] == nil {
 		t.Errorf("expected meta for vbucket 2")

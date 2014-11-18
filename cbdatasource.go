@@ -280,6 +280,7 @@ type BucketDataSourceStats struct {
 	TotRefreshWorkerOk   uint64
 
 	TotUPRDataChange                       uint64
+	TotUPRDataChangeStateErr               uint64
 	TotUPRDataChangeMutation               uint64
 	TotUPRDataChangeDeletion               uint64
 	TotUPRDataChangeExpiration             uint64
@@ -688,8 +689,8 @@ type VBucketState struct {
 	// Valid values for state: "" (dead/closed/unknown), "requested",
 	// "running", "closing".
 	State     string
-	SnapStart uint16
-	SnapEnd   uint16
+	SnapStart uint64
+	SnapEnd   uint64
 	SnapSaved bool // True when the snapStart/snapEnd have been persisted.
 }
 
@@ -818,6 +819,55 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				atomic.AddUint64(&d.stats.TotUPRDataChange, 1)
 
 				vbucketID := pkt.VBucket
+
+				currVBucketsMutex.Lock()
+
+				vbucketState := currVBuckets[vbucketID]
+				if vbucketState == nil || vbucketState.State != "running" {
+					currVBucketsMutex.Unlock()
+					atomic.AddUint64(&d.stats.TotUPRDataChangeStateErr, 1)
+					d.receiver.OnError(fmt.Errorf("error: DataChange,"+
+						" wrong vbucketState: %#v, err: %v", vbucketState, err))
+					return
+				}
+
+				if !vbucketState.SnapSaved {
+					// NOTE: Following the ep-engine's approach, we
+					// wait to persist SnapStart/SnapEnd until we see
+					// the first mutation/deletion in the new snapshot
+					// range.  That reduces a race window where if we
+					// kill and restart this process right now after a
+					// setVBucketMetaData() and before the next,
+					// first-mutation-in-snapshot, then a restarted
+					// stream-req using this just-saved
+					// SnapStart/SnapEnd might have a lastSeq number <
+					// SnapStart, where Couchbase Server will respond
+					// to the stream-req with an ERANGE error code.
+					v, _, err := d.getVBucketMetaData(vbucketID)
+					if err != nil || v == nil {
+						currVBucketsMutex.Unlock()
+						d.receiver.OnError(fmt.Errorf("error: DataChange,"+
+							" getVBucketMetaData, vbucketID: %d, err: %v",
+							vbucketID, err))
+						return
+					}
+
+					v.SnapStart = vbucketState.SnapStart
+					v.SnapEnd = vbucketState.SnapEnd
+
+					err = d.setVBucketMetaData(vbucketID, v)
+					if err != nil {
+						currVBucketsMutex.Unlock()
+						d.receiver.OnError(fmt.Errorf("error: DataChange,"+
+							" getVBucketMetaData, vbucketID: %d, err: %v",
+							vbucketID, err))
+						return
+					}
+
+					vbucketState.SnapSaved = true
+				}
+
+				currVBucketsMutex.Unlock()
 
 				seq := binary.BigEndian.Uint64(pkt.Extras[:8])
 
@@ -1125,29 +1175,9 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			return fmt.Errorf("bad snapshot extras, res: %#v", res)
 		}
 
-		v, _, err := d.getVBucketMetaData(vbucketID)
-		if err != nil {
-			return err
-		}
-
-		v.SnapStart = binary.BigEndian.Uint64(res.Extras[0:8])
-		v.SnapEnd = binary.BigEndian.Uint64(res.Extras[8:16])
-
-		err = d.setVBucketMetaData(vbucketID, v)
-		if err != nil {
-			return err
-		}
-
-		// TODO: Unlike our current implementation, the EP-engine DCP
-		// consumer won't persist SnapStart/SnapEnd right now but
-		// instead waits until it sees the forthcoming, first
-		// mutation/deletion in the new snapshot range.  That prevents
-		// a race where if we kill and restart the DCP connection
-		// right now after the setVBucketMetaData() and before the
-		// next, first-mutation-in-snapshot, then a restarted
-		// stream-req using this just-saved SnapStart/SnapEnd might
-		// have a lastSeq number < SnapStart, where Couchbase Server
-		// will send us an ERANGE.
+		vbucketState.SnapStart = binary.BigEndian.Uint64(res.Extras[0:8])
+		vbucketState.SnapEnd = binary.BigEndian.Uint64(res.Extras[8:16])
+		vbucketState.SnapSaved = false
 
 		snapType := binary.BigEndian.Uint32(res.Extras[16:20])
 
@@ -1156,8 +1186,8 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		// we're not implementing SNAP_ACK handling here.
 
 		atomic.AddUint64(&d.stats.TotUPRSnapshotStart, 1)
-		err = d.receiver.SnapshotStart(vbucketID,
-			v.SnapStart, v.SnapEnd, snapType)
+		err := d.receiver.SnapshotStart(vbucketID,
+			vbucketState.SnapStart, vbucketState.SnapEnd, snapType)
 		if err != nil {
 			atomic.AddUint64(&d.stats.TotUPRSnapshotStartErr, 1)
 			return err
