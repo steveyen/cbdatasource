@@ -913,14 +913,6 @@ func TestUPROpenStreamReq(t *testing.T) {
 	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
 
 	// ------------------------------------------------------------
-	req = &gomemcached.MCRequest{
-		Opcode: gomemcached.UPR_BUFFERACK,
-	}
-	reqR = <-rwc.readCh
-	copy(reqR.buf, req.HeaderBytes())
-	reqR.resCh <- RWRes{n: len(reqR.buf), err: nil}
-
-	// ------------------------------------------------------------
 	receiver.m.Lock()
 	if len(receiver.muts) != 0 {
 		t.Errorf("expected 0 muts")
