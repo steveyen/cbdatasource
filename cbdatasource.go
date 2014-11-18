@@ -1143,10 +1143,10 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		// mutation/deletion in the new snapshot range.  That prevents
 		// a race where if we kill and restart the DCP connection
 		// right now after the setVBucketMetaData() and before the
-		// next, first-mutation-in-snapshot, the a restart stream-req
-		// using this saved SnapStart/SnapEnd might have a lastSeq
-		// number < SnapStart, where Couchbase Server will send us an
-		// ERANGE.
+		// next, first-mutation-in-snapshot, then a restarted
+		// stream-req using this just-saved SnapStart/SnapEnd might
+		// have a lastSeq number < SnapStart, where Couchbase Server
+		// will send us an ERANGE.
 
 		snapType := binary.BigEndian.Uint32(res.Extras[16:20])
 
