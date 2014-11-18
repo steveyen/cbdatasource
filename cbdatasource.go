@@ -766,6 +766,10 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 		return progress
 	}
 
+	// Values for vbucketID state in currVBucketIDs:
+	// "" (dead/closed/unknown), "requested", "running", "closing".
+	currVBucketIDs := map[uint16]string{}
+
 	go func() { // Sender goroutine.
 		defer close(sendEndCh)
 
@@ -862,10 +866,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			}
 		}
 	}()
-
-	// Values for vbucketID state in currVBucketIDs:
-	// "" (dead/closed/unknown), "requested", "running", "closing".
-	currVBucketIDs := map[uint16]string{}
 
 	atomic.AddUint64(&d.stats.TotWorkerBodyKick, 1)
 	d.Kick("new-worker")
