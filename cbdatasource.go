@@ -1137,10 +1137,22 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			return 0, err
 		}
 
+		// TODO: Unlike our current implementation, the EP-engine DCP
+		// consumer won't persist SnapStart/SnapEnd right now but
+		// instead waits until it sees the forthcoming, first
+		// mutation/deletion in the new snapshot range.  That prevents
+		// a race where if we kill and restart the DCP connection
+		// right now after the setVBucketMetaData() and before the
+		// next, first-mutation-in-snapshot, the a restart stream-req
+		// using this saved SnapStart/SnapEnd might have a lastSeq
+		// number < SnapStart, where Couchbase Server will send us an
+		// ERANGE.
+
 		snapType := binary.BigEndian.Uint32(res.Extras[16:20])
 
 		// NOTE: We should never see a snapType with SNAP_ACK flag of
-		// true, as that's only used during takeovers.
+		// true, as that's only used during takeovers, so that's why
+		// we're not implementing SNAP_ACK handling here.
 
 		atomic.AddUint64(&d.stats.TotUPRSnapshotStart, 1)
 		err = d.receiver.SnapshotStart(vbucketID,
