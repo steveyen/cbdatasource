@@ -268,10 +268,10 @@ type BucketDataSourceStats struct {
 	TotWorkerReceiveErr   uint64
 	TotWorkerReceiveOk    uint64
 
-	TotWorkerSendEndCh     uint64
-	TotWorkerRecvEndCh     uint64
-	TotWorkerRecvCh        uint64
-	TotWorkerRecvChDone    uint64
+	TotWorkerSendEndCh uint64
+	TotWorkerRecvEndCh uint64
+
+	TotWorkerHandleRecv    uint64
 	TotWorkerHandleRecvErr uint64
 	TotWorkerHandleRecvOk  uint64
 
@@ -748,27 +748,22 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	ackBytes :=
 		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
 
+	sendCh := make(chan *gomemcached.MCRequest, 1)
 	sendEndCh := make(chan struct{})
 	recvEndCh := make(chan struct{})
-
-	sendCh := make(chan *gomemcached.MCRequest)
-	recvCh := make(chan *gomemcached.MCResponse)
 
 	cleanup := func(progress int, err error) int {
 		if err != nil {
 			d.receiver.OnError(err)
 		}
-		go func() {
-			close(sendCh)
-			for _ = range recvCh {
-			}
-		}()
+		go close(sendCh)
 		return progress
 	}
 
 	// Values for vbucketID state in currVBucketIDs:
 	// "" (dead/closed/unknown), "requested", "running", "closing".
 	currVBucketIDs := map[uint16]string{}
+	currVBucketIdsMutex := sync.Mutex{} // Protects currVBucketIDs.
 
 	go func() { // Sender goroutine.
 		defer close(sendEndCh)
@@ -788,13 +783,13 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	}()
 
 	go func() { // Receiver goroutine.
-		defer close(recvCh)
 		defer close(recvEndCh)
 
 		atomic.AddUint64(&d.stats.TotWorkerReceiveStart, 1)
 
 		var hdr [gomemcached.HDR_LEN]byte
 		var pkt gomemcached.MCRequest
+		var res gomemcached.MCResponse
 
 		// Track received bytes in case we need to buffer-ack.
 		recvBytesTotal := uint32(0)
@@ -815,8 +810,6 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			if pkt.Opcode == gomemcached.UPR_MUTATION ||
 				pkt.Opcode == gomemcached.UPR_DELETION ||
 				pkt.Opcode == gomemcached.UPR_EXPIRATION {
-				// Most common messages are handled on this same
-				// goroutine instead of sending over the recvCh.
 				atomic.AddUint64(&d.stats.TotUPRDataChange, 1)
 
 				vbucketID := pkt.VBucket
@@ -843,25 +836,35 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 				atomic.AddUint64(&d.stats.TotUPRDataChangeOk, 1)
 			} else {
-				recvCh <- &gomemcached.MCResponse{
-					Opcode: pkt.Opcode,
-					Cas:    pkt.Cas,
-					Opaque: pkt.Opaque,
-					Status: gomemcached.Status(pkt.VBucket),
-					Extras: pkt.Extras,
-					Key:    pkt.Key,
-					Body:   pkt.Body,
+				res.Opcode = pkt.Opcode
+				res.Opaque = pkt.Opaque
+				res.Status = gomemcached.Status(pkt.VBucket)
+				res.Extras = pkt.Extras
+				res.Cas = pkt.Cas
+				res.Key = pkt.Key
+				res.Body = pkt.Body
+
+				atomic.AddUint64(&d.stats.TotWorkerHandleRecv, 1)
+				currVBucketIdsMutex.Lock()
+				err := d.handleRecv(sendCh, currVBucketIDs, &res)
+				currVBucketIdsMutex.Unlock()
+				if err != nil {
+					atomic.AddUint64(&d.stats.TotWorkerHandleRecvErr, 1)
+					d.receiver.OnError(fmt.Errorf("error: HandleRecv, err: %v", err))
+					return
 				}
+				atomic.AddUint64(&d.stats.TotWorkerHandleRecvOk, 1)
 			}
 
 			recvBytesTotal +=
 				uint32(gomemcached.HDR_LEN) +
 					uint32(len(pkt.Key)+len(pkt.Extras)+len(pkt.Body))
 			if ackBytes > 0 && recvBytesTotal > ackBytes {
-				ack := &gomemcached.MCResponse{Opcode: gomemcached.UPR_BUFFERACK}
+				atomic.AddUint64(&d.stats.TotUPRBufferAck, 1)
+				ack := &gomemcached.MCRequest{Opcode: gomemcached.UPR_BUFFERACK}
 				ack.Extras = make([]byte, 4) // TODO: Memory mgmt.
 				binary.BigEndian.PutUint32(ack.Extras, uint32(recvBytesTotal))
-				recvCh <- ack
+				sendCh <- ack
 				recvBytesTotal = 0
 			}
 		}
@@ -874,7 +877,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 		select {
 		case <-sendEndCh:
 			atomic.AddUint64(&d.stats.TotWorkerSendEndCh, 1)
-			return cleanup(1, nil) // TODO: Don't assume we made progress on disconnect.
+			return cleanup(0, nil)
 
 		case <-recvEndCh:
 			// If we lost a connection, then maybe a node was rebalanced out,
@@ -882,27 +885,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 			d.Kick("recvEndCh")
 
 			atomic.AddUint64(&d.stats.TotWorkerRecvEndCh, 1)
-			return cleanup(1, nil) // TODO: Don't assume we made progress on disconnect.
-
-		case res, alive := <-recvCh:
-			atomic.AddUint64(&d.stats.TotWorkerRecvCh, 1)
-
-			if !alive {
-				// If we lost a connection, then maybe a node was rebalanced out,
-				// or failed over, so ask for a cluster refresh just in case.
-				d.Kick("recvChDone")
-
-				atomic.AddUint64(&d.stats.TotWorkerRecvChDone, 1)
-				return cleanup(1, nil) // We saw disconnect; assume we made progress.
-			}
-
-			progress, err := d.handleRecv(sendCh, currVBucketIDs, res)
-			if err != nil {
-				atomic.AddUint64(&d.stats.TotWorkerHandleRecvErr, 1)
-				return cleanup(progress, err)
-			}
-
-			atomic.AddUint64(&d.stats.TotWorkerHandleRecvOk, 1)
+			return cleanup(0, nil)
 
 		case wantVBucketIDs, alive := <-workerCh:
 			atomic.AddUint64(&d.stats.TotRefreshWorker, 1)
@@ -912,10 +895,11 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 				return cleanup(-1, nil) // We've been asked to shutdown.
 			}
 
-			progress, err :=
-				d.refreshWorker(sendCh, currVBucketIDs, wantVBucketIDs)
+			currVBucketIdsMutex.Lock()
+			err := d.refreshWorker(sendCh, currVBucketIDs, wantVBucketIDs)
+			currVBucketIdsMutex.Unlock()
 			if err != nil {
-				return cleanup(progress, err)
+				return cleanup(0, err)
 			}
 
 			atomic.AddUint64(&d.stats.TotRefreshWorkerOk, 1)
@@ -926,8 +910,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 }
 
 func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
-	currVBucketIDs map[uint16]string, wantVBucketIDsArr []uint16) (
-	progress int, err error) {
+	currVBucketIDs map[uint16]string, wantVBucketIDsArr []uint16) error {
 	// Convert to map for faster lookup.
 	wantVBucketIDs := map[uint16]bool{}
 	for _, wantVBucketID := range wantVBucketIDsArr {
@@ -940,7 +923,7 @@ func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
 				// A UPR_STREAMREQ request is already on the wire, so
 				// error rather than have complex compensation logic.
 				atomic.AddUint64(&d.stats.TotWantCloseRequestedVBucketErr, 1)
-				return 0, fmt.Errorf("want close requested vbucketID: %d", currVBucketID)
+				return fmt.Errorf("want close requested vbucketID: %d", currVBucketID)
 			}
 			if state == "running" {
 				currVBucketIDs[currVBucketID] = "closing"
@@ -960,24 +943,23 @@ func (d *bucketDataSource) refreshWorker(sendCh chan *gomemcached.MCRequest,
 			// A UPR_CLOSESTREAM request is already on the wire, so
 			// error rather than have complex compensation logic.
 			atomic.AddUint64(&d.stats.TotWantClosingVBucketErr, 1)
-			return 0, fmt.Errorf("want closing vbucketID: %d", wantVBucketID)
+			return fmt.Errorf("want closing vbucketID: %d", wantVBucketID)
 		}
 		if state == "" {
 			currVBucketIDs[wantVBucketID] = "requested"
 			atomic.AddUint64(&d.stats.TotUPRStreamReqWant, 1)
 			err := d.sendStreamReq(sendCh, wantVBucketID)
 			if err != nil {
-				return 0, err
+				return err
 			}
 		} // Else, state of "requested" or "running", so no-op.
 	}
 
-	return 0, nil
+	return nil
 }
 
 func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
-	currVBucketIDs map[uint16]string, res *gomemcached.MCResponse) (
-	progress int, err error) {
+	currVBucketIDs map[uint16]string, res *gomemcached.MCResponse) error {
 	switch res.Opcode {
 	case gomemcached.UPR_NOOP:
 		atomic.AddUint64(&d.stats.TotUPRNoop, 1)
@@ -996,7 +978,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		if vbucketIDState != "requested" {
 			atomic.AddUint64(&d.stats.TotUPRStreamReqResStateErr, 1)
-			return 0, fmt.Errorf("streamreq non-requested,"+
+			return fmt.Errorf("streamreq non-requested,"+
 				" vbucketID: %d, vbucketIDState: %s, res: %#v",
 				vbucketID, vbucketIDState, res)
 		}
@@ -1012,7 +994,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 					atomic.AddUint64(&d.stats.TotUPRStreamReqResRollback, 1)
 
 					if len(res.Extras) != 8 {
-						return 0, fmt.Errorf("bad rollback extras: %#v", res)
+						return fmt.Errorf("bad rollback extras: %#v", res)
 					}
 
 					rollbackSeq = binary.BigEndian.Uint64(res.Extras)
@@ -1026,14 +1008,14 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 				err := d.receiver.Rollback(vbucketID, rollbackSeq)
 				if err != nil {
 					atomic.AddUint64(&d.stats.TotUPRStreamReqResRollbackErr, 1)
-					return 0, err
+					return err
 				}
 
 				currVBucketIDs[vbucketID] = "requested"
 				atomic.AddUint64(&d.stats.TotUPRStreamReqResWantAfterRollbackErr, 1)
 				err = d.sendStreamReq(sendCh, vbucketID)
 				if err != nil {
-					return 0, err
+					return err
 				}
 			} else {
 				if res.Status == gomemcached.NOT_MY_VBUCKET {
@@ -1052,18 +1034,18 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			flog, err := ParseFailOverLog(res.Body[:])
 			if err != nil {
 				atomic.AddUint64(&d.stats.TotUPRStreamReqResFLogErr, 1)
-				return 0, err
+				return err
 			}
 			v, _, err := d.getVBucketMetaData(vbucketID)
 			if err != nil {
-				return 0, err
+				return err
 			}
 
 			v.FailOverLog = flog
 
 			err = d.setVBucketMetaData(vbucketID, v)
 			if err != nil {
-				return 0, err
+				return err
 			}
 
 			currVBucketIDs[vbucketID] = "running"
@@ -1081,7 +1063,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		if vbucketIDState != "running" &&
 			vbucketIDState != "closing" {
 			atomic.AddUint64(&d.stats.TotUPRStreamEndStateErr, 1)
-			return 0, fmt.Errorf("stream-end bad state,"+
+			return fmt.Errorf("stream-end bad state,"+
 				" vbucketID: %d, vbucketIDState: %s, res: %#v",
 				vbucketID, vbucketIDState, res)
 		}
@@ -1102,14 +1084,14 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		if vbucketIDState != "closing" {
 			atomic.AddUint64(&d.stats.TotUPRCloseStreamResStateErr, 1)
-			return 0, fmt.Errorf("close-stream bad state,"+
+			return fmt.Errorf("close-stream bad state,"+
 				" vbucketID: %d, vbucketIDState: %s, res: %#v",
 				vbucketID, vbucketIDState, res)
 		}
 
 		if res.Status != gomemcached.SUCCESS {
 			atomic.AddUint64(&d.stats.TotUPRCloseStreamResErr, 1)
-			return 0, fmt.Errorf("close-stream failed,"+
+			return fmt.Errorf("close-stream failed,"+
 				" vbucketID: %d, vbucketIDState: %s, res: %#v",
 				vbucketID, vbucketIDState, res)
 		}
@@ -1127,18 +1109,18 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		if vbucketIDState != "running" {
 			atomic.AddUint64(&d.stats.TotUPRSnapshotStateErr, 1)
-			return 0, fmt.Errorf("snapshot non-running,"+
+			return fmt.Errorf("snapshot non-running,"+
 				" vbucketID: %d, vbucketIDState: %s, res: %#v",
 				vbucketID, vbucketIDState, res)
 		}
 
 		if len(res.Extras) < 20 {
-			return 0, fmt.Errorf("bad snapshot extras, res: %#v", res)
+			return fmt.Errorf("bad snapshot extras, res: %#v", res)
 		}
 
 		v, _, err := d.getVBucketMetaData(vbucketID)
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		v.SnapStart = binary.BigEndian.Uint64(res.Extras[0:8])
@@ -1146,7 +1128,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 
 		err = d.setVBucketMetaData(vbucketID, v)
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		// TODO: Unlike our current implementation, the EP-engine DCP
@@ -1171,7 +1153,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 			v.SnapStart, v.SnapEnd, snapType)
 		if err != nil {
 			atomic.AddUint64(&d.stats.TotUPRSnapshotStartErr, 1)
-			return 0, err
+			return err
 		}
 
 		atomic.AddUint64(&d.stats.TotUPRSnapshotOk, 1)
@@ -1180,7 +1162,7 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		atomic.AddUint64(&d.stats.TotUPRBufferAck, 1)
 		if res.Status != gomemcached.SUCCESS {
 			atomic.AddUint64(&d.stats.TotUPRBufferAckErr, 1)
-			return 0, fmt.Errorf("failed bufferack: %#v", res)
+			return fmt.Errorf("failed bufferack: %#v", res)
 		}
 
 		atomic.AddUint64(&d.stats.TotUPRBufferAckSend, 1)
@@ -1193,26 +1175,26 @@ func (d *bucketDataSource) handleRecv(sendCh chan *gomemcached.MCRequest,
 		atomic.AddUint64(&d.stats.TotUPRControl, 1)
 		if res.Status != gomemcached.SUCCESS {
 			atomic.AddUint64(&d.stats.TotUPRControlErr, 1)
-			return 0, fmt.Errorf("failed control: %#v", res)
+			return fmt.Errorf("failed control: %#v", res)
 		}
 
 	case gomemcached.UPR_OPEN:
 		// Opening was long ago, so we should not see UPR_OPEN responses.
-		return 0, fmt.Errorf("unexpected upr_open, res: %#v", res)
+		return fmt.Errorf("unexpected upr_open, res: %#v", res)
 
 	case gomemcached.UPR_ADDSTREAM:
 		// This normally comes from ns-server / dcp-migrator.
-		return 0, fmt.Errorf("unexpected upr_addstream, res: %#v", res)
+		return fmt.Errorf("unexpected upr_addstream, res: %#v", res)
 
 	case gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION:
 		// This should have been handled already in receiver goroutine.
-		return 0, fmt.Errorf("unexpected data change, res: %#v", res)
+		return fmt.Errorf("unexpected data change, res: %#v", res)
 
 	default:
-		return 0, fmt.Errorf("unknown opcode, res: %#v", res)
+		return fmt.Errorf("unknown opcode, res: %#v", res)
 	}
 
-	return 1, nil
+	return nil
 }
 
 func (d *bucketDataSource) getVBucketMetaData(vbucketID uint16) (
