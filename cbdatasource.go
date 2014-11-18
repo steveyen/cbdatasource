@@ -269,6 +269,7 @@ type BucketDataSourceStats struct {
 	TotWorkerReceiveOk    uint64
 
 	TotWorkerSendEndCh     uint64
+	TotWorkerRecvEndCh     uint64
 	TotWorkerRecvCh        uint64
 	TotWorkerRecvChDone    uint64
 	TotWorkerHandleRecvErr uint64
@@ -747,7 +748,9 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 	ackBytes :=
 		uint32(d.options.FeedBufferAckThreshold * float32(d.options.FeedBufferSizeBytes))
 
-	sendEndCh := make(chan bool)
+	sendEndCh := make(chan struct{})
+	recvEndCh := make(chan struct{})
+
 	sendCh := make(chan *gomemcached.MCRequest)
 	recvCh := make(chan *gomemcached.MCResponse)
 
@@ -782,6 +785,7 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 
 	go func() { // Receiver goroutine.
 		defer close(recvCh)
+		defer close(recvEndCh)
 
 		atomic.AddUint64(&d.stats.TotWorkerReceiveStart, 1)
 
@@ -870,7 +874,15 @@ func (d *bucketDataSource) worker(server string, workerCh chan []uint16) int {
 		select {
 		case <-sendEndCh:
 			atomic.AddUint64(&d.stats.TotWorkerSendEndCh, 1)
-			return cleanup(1, nil) // We saw disconnect; assume we made progress.
+			return cleanup(1, nil) // TODO: Don't assume we made progress on disconnect.
+
+		case <-recvEndCh:
+			// If we lost a connection, then maybe a node was rebalanced out,
+			// or failed over, so ask for a cluster refresh just in case.
+			d.Kick("recvEndCh")
+
+			atomic.AddUint64(&d.stats.TotWorkerRecvEndCh, 1)
+			return cleanup(1, nil) // TODO: Don't assume we made progress on disconnect.
 
 		case res, alive := <-recvCh:
 			atomic.AddUint64(&d.stats.TotWorkerRecvCh, 1)
